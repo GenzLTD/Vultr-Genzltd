@@ -7,17 +7,17 @@
 # =============================================================
 set -euo pipefail
 
-DEPLOY_PATH="${DEPLOY_PATH:-/opt/looma-zervi}"
+# 本地 clone：默认就是本仓。生产机由 CI 传入 DEPLOY_PATH=/opt/looma-zervi。
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DEPLOY_PATH="${DEPLOY_PATH:-$ROOT}"
 
-echo "[bootstrap] 建目录 ..."
+echo "[bootstrap] 体检本仓布局（不创建 /var/www/genz-web，营销站不在本机）..."
 mkdir -p \
-  "$DEPLOY_PATH" \
   "$DEPLOY_PATH/backend" \
   "$DEPLOY_PATH/docker" \
   "$DEPLOY_PATH/data/poetry_full" \
-  "$DEPLOY_PATH/data/chroma_models" \
-  /var/www/genz-web /var/www/saas/dist
-ls -d "$DEPLOY_PATH" "$DEPLOY_PATH/backend" "$DEPLOY_PATH/docker" 2>/dev/null
+  "$DEPLOY_PATH/data/chroma_models"
+ls -d "$DEPLOY_PATH" "$DEPLOY_PATH/backend" "$DEPLOY_PATH/docker" "$DEPLOY_PATH/nginx" 2>/dev/null
 
 echo "[bootstrap] 容器运行时:"
 if command -v docker >/dev/null 2>&1; then

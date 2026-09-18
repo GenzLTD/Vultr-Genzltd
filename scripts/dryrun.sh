@@ -2,81 +2,98 @@
 # =============================================================
 # dryrun.sh — 本地干跑（绝不动真机）
 #
-#   把变更集在本机完整过一遍，通过后才谈"动真机"：
-#     1) 组装 /opt/looma-zervi 布局镜像（compose 用的是相对路径，
-#        只有复现目录布局才能真实解析 ../backend、../data/...）
+#   只依赖本仓目录树，不组装 /opt/looma-zervi，不要求旁边有 looma-zervi。
+#     1) 本仓内补齐 data/ 与 backend/.env 桩
 #     2) docker compose config 语法校验
 #     3) 端口收内网断言：唯一允许发布的宿主端口是 127.0.0.1:5200
-#     4) nginx -t 语法校验（容器内跑 nginx 1.18，对齐 Ubuntu 22.04）
-#     5) 基线指纹断言 + 打印与现网的精确差异（证明只改了该改的）
-#     6) 运行时语义实证：回环绑定在其它网卡上确实不可达
+#     4) nginx -t（容器内 nginx，读本仓 nginx/nginx.conf）
+#     5) 裸域 Host 不得回归 + compose 相对 baseline 仍是端口收敛
+#     6) 运行时：回环绑定在其它网卡上不可达
 #
 #   用法:
-#     bash scripts/dryrun.sh            # 全量（含运行时实证）
-#     bash scripts/dryrun.sh --static   # 只做静态校验，不拉镜像
+#     bash scripts/dryrun.sh            # 全量
+#     bash scripts/dryrun.sh --static   # 只做静态校验
 #
-#   退出码: 0 = 干跑全绿，可进入真机流程；非 0 = 有断言失败
+#   退出码: 0 = 干跑全绿；非 0 = 有断言失败
 # =============================================================
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LAYOUT="$ROOT/dryrun/layout/opt-looma-zervi"
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
 SSL_DIR="$ROOT/dryrun/layout/ssl"
+ERR_DIR="$ROOT/dryrun/layout"
+COMPOSE="$ROOT/compose/docker-compose.yml"
+NGINX_CONF="$ROOT/nginx/nginx.conf"
 NGINX_IMAGE="${NGINX_IMAGE:-nginx:1.18}"
 PROBE_PORT=15200
 RUNTIME=1
 [ "${1:-}" = "--static" ] && RUNTIME=0
 
-# 现网冻结基线（见 baseline/MANIFEST.md）
-BASE_COMPOSE_MD5="8aace57b5c757e70a5298add5534ef6f"
-BASE_NGINX_MD5="0f505e33f8fb047f4185689b89e4c256"
 ALLOWED_PUBLISHED="127.0.0.1:5200"
+PY=""
+if [ -n "${PYTHON_BIN:-}" ] && "$PYTHON_BIN" -c "import sys" >/dev/null 2>&1; then
+  PY="$PYTHON_BIN"
+elif command -v py >/dev/null 2>&1 && py -3 -c "import sys" >/dev/null 2>&1; then
+  PY=py
+elif command -v python3 >/dev/null 2>&1 && python3 -c "import sys" >/dev/null 2>&1; then
+  PY=python3
+elif command -v python >/dev/null 2>&1 && python -c "import sys" >/dev/null 2>&1; then
+  PY=python
+fi
+runpy() {
+  if [ -z "$PY" ]; then
+    echo "python missing" >&2
+    return 127
+  fi
+  if [ "$PY" = py ]; then py -3 "$@"; else "$PY" "$@"; fi
+}
 
 fail=0
 ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 no()  { printf '  \033[31m✗\033[0m %s\n' "$1"; fail=1; }
 hdr() { printf '\n\033[1m[%s]\033[0m %s\n' "$1" "$2"; }
-md5of() { if command -v md5 >/dev/null 2>&1; then md5 -q "$1"; else md5sum "$1" | cut -d' ' -f1; fi; }
 
 printf '\033[1m=== Vultr-Genzltd 本地干跑 ===\033[0m\n'
 printf '仓库: %s\n' "$ROOT"
 
 # -------------------------------------------------------------
-hdr 1 "组装布局镜像"
-rm -rf "$LAYOUT"
-mkdir -p "$LAYOUT/docker" "$LAYOUT/backend" "$LAYOUT/data/poetry_full" "$LAYOUT/data/chroma_models"
-cp "$ROOT/compose/docker-compose.yml" "$LAYOUT/docker/docker-compose.yml"
-# 倒出 backend/（排除 .env 真值、缓存、数据卷内容、CI 占位）
-rsync -a --exclude='.env' --exclude='__pycache__' --exclude='*.pyc' \
-  --exclude='chroma_data' --exclude='chroma_data/**' \
-  --exclude='poetry_data' --exclude='poetry_data/**' \
-  --exclude='data/*.db' --exclude='data/*.sqlite*' \
-  --exclude='git_commit.txt' \
-  "$ROOT/backend/" "$LAYOUT/backend/"
-# 倒出 docker/（仅本仓用到的两个；compose 用相对路径 ../docker/Dockerfile.backend）
-cp "$ROOT/docker/Dockerfile.backend" "$LAYOUT/docker/Dockerfile.backend"
-cp "$ROOT/docker/.dockerignore"     "$LAYOUT/docker/.dockerignore"
-# 干跑要 env_file 存在（compose config 需要）；用 deploy 侧 .env.example 作 stub
-# ——绝不含真值，仅满足 compose 解析；与 backend/.env.example（产品侧）并存不冲突
-cp "$ROOT/.env.example" "$LAYOUT/backend/.env"
-ok "布局就绪: ${LAYOUT#$ROOT/}"
+hdr 1 "本仓布局（不模仿生产机 /opt）"
+mkdir -p "$ROOT/data/poetry_full" "$ROOT/data/chroma_models" "$ERR_DIR"
+if [ ! -f "$ROOT/backend/.env" ]; then
+  cp "$ROOT/.env.example" "$ROOT/backend/.env"
+  ok "写入 backend/.env 桩（来自 .env.example，无真密钥）"
+else
+  ok "backend/.env 已存在，未覆盖"
+fi
+if [ ! -f "$COMPOSE" ]; then no "缺少 $COMPOSE"; else ok "compose: compose/docker-compose.yml"; fi
+if [ ! -f "$NGINX_CONF" ]; then no "缺少 $NGINX_CONF"; else ok "nginx: nginx/nginx.conf"; fi
+if [ ! -d "$ROOT/backend" ]; then no "缺少 backend/（本仓应自带，不要去借 looma-zervi）"; else ok "backend/: 本仓自带"; fi
+if [ -f "$ROOT/docker/Dockerfile.backend" ]; then ok "docker/Dockerfile.backend"; else no "缺少 docker/Dockerfile.backend"; fi
+if [ -n "$PY" ]; then ok "python: $PY"; else no "找不到 python3 / python / py（可设 PYTHON_BIN）"; fi
+if [ "$fail" -ne 0 ]; then
+  printf '\n\033[31m布局不齐，停止。\033[0m\n'
+  exit 1
+fi
 
 # -------------------------------------------------------------
 hdr 2 "docker compose 语法校验"
-if docker compose -f "$LAYOUT/docker/docker-compose.yml" config -q 2>"$LAYOUT/config.err"; then
+if docker compose -f "$COMPOSE" --project-directory "$ROOT/compose" config -q 2>"$ERR_DIR/compose.err"; then
   ok "compose 语法通过"
+  rm -f "$ERR_DIR/compose.err"
 else
   no "compose 语法失败"
-  sed 's/^/     /' "$LAYOUT/config.err" | head -20
+  sed 's/^/     /' "$ERR_DIR/compose.err" | head -20
 fi
 
 # -------------------------------------------------------------
 hdr 3 "端口收内网断言（唯一允许发布: ${ALLOWED_PUBLISHED}）"
-if docker compose -f "$LAYOUT/docker/docker-compose.yml" config --format json >"$LAYOUT/rendered.json" 2>/dev/null; then
-  python3 - "$LAYOUT/rendered.json" "$ALLOWED_PUBLISHED" <<'PY'
+RENDERED="$ERR_DIR/rendered.json"
+if docker compose -f "$COMPOSE" --project-directory "$ROOT/compose" config --format json >"$RENDERED" 2>/dev/null; then
+  runpy - "$RENDERED" "$ALLOWED_PUBLISHED" <<'PY'
 import json, sys
 rendered, allowed = sys.argv[1], sys.argv[2]
-d = json.load(open(rendered))
+d = json.load(open(rendered, encoding="utf-8"))
 svcs = d.get("services", {})
 expected = {"backend", "chromadb", "redis"}
 rc = 0
@@ -102,11 +119,12 @@ for name in sorted(svcs):
             print(f"  \033[31m✗\033[0m {name}: {tag} → 容器 {target}（应为 {allowed} 或不发布）")
             rc = 1
 if allowed not in published:
-    print(f"  \033[31m✗\033[0m 缺少必需的发布端口 {allowed}（宿主 nginx 的 upstream 依赖它）")
+    print(f"  \033[31m✗\033[0m 缺少必需的发布端口 {allowed}（宿主 nginx upstream 依赖它）")
     rc = 1
 sys.exit(rc)
 PY
   [ $? -ne 0 ] && fail=1
+  rm -f "$RENDERED"
 else
   no "无法渲染 compose 配置，端口断言跳过"
 fi
@@ -126,7 +144,7 @@ else
       -keyout "$SSL_DIR/privkey.pem" -out "$SSL_DIR/fullchain.pem" >/dev/null 2>&1
   fi
   out="$(docker run --rm --entrypoint nginx \
-    -v "$ROOT/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" \
+    -v "$NGINX_CONF:/etc/nginx/nginx.conf:ro" \
     -v "$SSL_DIR:/etc/nginx/ssl:ro" \
     "$img" -t 2>&1)"
   printf '%s\n' "$out" | sed 's/^/     /'
@@ -138,22 +156,46 @@ else
 fi
 
 # -------------------------------------------------------------
-hdr 5 "基线指纹断言 + 精确差异"
-n_md5="$(md5of "$ROOT/nginx/nginx.conf")"
-if [ "$n_md5" = "$BASE_NGINX_MD5" ]; then
-  ok "nginx.conf 与现网逐字节一致（本次不改 nginx）"
+hdr 5 "期望态断言（本仓 nginx / compose，不是生产机路径）"
+runpy - "$NGINX_CONF" <<'PY'
+import re, sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+tokens = []
+for m in re.finditer(r"(?m)^\s*server_name\s+([^;]+);", text):
+    tokens.extend(t for t in m.group(1).split() if t)
+bare = [t for t in tokens if t in ("genz.ltd", "www.genz.ltd")]
+need = {"api.genz.ltd", "tspace.genz.ltd"}
+rc = 0
+if bare:
+    print(f"  \033[31m✗\033[0m nginx 仍有裸域 server_name: {bare}")
+    rc = 1
+else:
+    print("  \033[32m✓\033[0m nginx 无 genz.ltd / www.genz.ltd server_name")
+missing = sorted(need - set(tokens))
+if missing:
+    print(f"  \033[31m✗\033[0m nginx 缺少 Host: {missing}")
+    rc = 1
+else:
+    print("  \033[32m✓\033[0m nginx Host: api.genz.ltd, tspace.genz.ltd")
+sys.exit(rc)
+PY
+[ $? -ne 0 ] && fail=1
+
+if diff -q "$ROOT/baseline/docker-compose.yml" "$COMPOSE" >/dev/null 2>&1; then
+  no "compose 与 baseline 一致——P0 端口收敛未生效"
 else
-  no "nginx.conf 被改动（$n_md5 ≠ 基线 ${BASE_NGINX_MD5}）——P0 不含 nginx 改动"
+  changed="$(diff -u "$ROOT/baseline/docker-compose.yml" "$COMPOSE" | grep -cE '^[+-][^+-]' || true)"
+  ok "compose 相对 baseline 有差异（${changed} 行，应为端口收内网）"
+  echo "     --- 变更集（- baseline / + 期望态）---"
+  diff -u "$ROOT/baseline/docker-compose.yml" "$COMPOSE" \
+    | sed -n '3,80p' | sed 's/^/     /'
 fi
-c_md5="$(md5of "$ROOT/compose/docker-compose.yml")"
-if [ "$c_md5" = "$BASE_COMPOSE_MD5" ]; then
-  no "compose 与现网一致——变更未生效"
+
+if diff -q "$ROOT/baseline/nginx.conf" "$NGINX_CONF" >/dev/null 2>&1; then
+  no "nginx 仍等于 2026-09-18 晨间基线（含裸域块）——摘块未进本仓"
 else
-  changed="$(diff -u "$ROOT/baseline/docker-compose.yml" "$ROOT/compose/docker-compose.yml" | grep -cE '^[+-][^+-]' || true)"
-  ok "compose 相对现网有差异（${changed} 行变动）"
-  echo "     --- 变更集（- 现网 / + 变更后）---"
-  diff -u "$ROOT/baseline/docker-compose.yml" "$ROOT/compose/docker-compose.yml" \
-    | sed -n '3,200p' | sed 's/^/     /'
+  ok "nginx 已相对 baseline 摘掉裸域（这是期望态，不是事故）"
 fi
 
 # -------------------------------------------------------------
@@ -163,11 +205,11 @@ if [ "$RUNTIME" -eq 0 ]; then
 elif [ -z "$img" ]; then
   echo "     （无可用镜像，跳过）"
 else
-  docker rm -f looma-dryrun-probe >/dev/null 2>&1 || true
-  if docker run -d --name looma-dryrun-probe --entrypoint sleep \
+  docker rm -f vultr-genzltd-dryrun-probe >/dev/null 2>&1 || true
+  if docker run -d --name vultr-genzltd-dryrun-probe --entrypoint sleep \
        -p "127.0.0.1:$PROBE_PORT:80" "$img" 20 >/dev/null 2>&1; then
     sleep 1
-    bound="$(docker port looma-dryrun-probe 80/tcp 2>/dev/null | head -1)"
+    bound="$(docker port vultr-genzltd-dryrun-probe 80/tcp 2>/dev/null | head -1)"
     case "$bound" in
       127.0.0.1:*) ok "docker 实际绑定 = $bound" ;;
       *)           no "docker 实际绑定异常 = ${bound:-（空）}" ;;
@@ -177,17 +219,26 @@ else
     else
       no "回环不可达（127.0.0.1:${PROBE_PORT}）"
     fi
-    lanip="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
-    if [ -n "$lanip" ]; then
+    lanip=""
+    if command -v ip >/dev/null 2>&1; then
+      lanip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+    fi
+    if [ -z "$lanip" ] && command -v hostname >/dev/null 2>&1; then
+      lanip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    fi
+    if [ -z "$lanip" ] && [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+      lanip="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
+    fi
+    if [ -n "$lanip" ] && [ "$lanip" != "127.0.0.1" ]; then
       if nc -z -w 2 "$lanip" "$PROBE_PORT" >/dev/null 2>&1; then
         no "局域网可达（$lanip:${PROBE_PORT}）——收内网未生效"
       else
         ok "局域网不可达（$lanip:${PROBE_PORT}）——收内网生效"
       fi
     else
-      echo "     （未取到局域网 IP，跳过外部网卡验证）"
+      echo "     （未取到非回环局域网 IP，跳过外部网卡验证）"
     fi
-    docker rm -f looma-dryrun-probe >/dev/null 2>&1 || true
+    docker rm -f vultr-genzltd-dryrun-probe >/dev/null 2>&1 || true
   else
     no "探针容器启动失败（镜像 ${img}）"
   fi
@@ -196,7 +247,7 @@ fi
 # -------------------------------------------------------------
 printf '\n\033[1m=== 干跑结论 ===\033[0m\n'
 if [ "$fail" -eq 0 ]; then
-  printf '\033[32m全部通过。\033[0m可进入真机流程（需另行授权）。\n'
+  printf '\033[32m全部通过。\033[0m本仓自包含校验完成（未碰真机）。\n'
 else
   printf '\033[31m存在失败断言，不得进入真机流程。\033[0m\n'
 fi

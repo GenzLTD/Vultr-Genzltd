@@ -60,8 +60,9 @@
 
 - `/etc/nginx/sites-enabled/` **为空**，nginx **1.18.0** 全靠 `/etc/nginx/nginx.conf` 内嵌 server 块
   → "改 nginx 只需改这一个文件"成立。
-- 基线仍精确：`docker-compose.yml` md5 = `8aace57b…`、`nginx.conf` = `0f505e33…`
-  → 与 `baseline/` **逐字节一致，P0 确实未落**。
+- 基线仍精确：**采集当时** `docker-compose.yml` md5 = `8aace57b…`、`nginx.conf` = `0f505e33…`
+  → 与 `baseline/` 逐字节一致。**之后**真机 nginx 已按摘块手操换成无裸域块（md5 `fb490978…`）；
+  本仓期望态是 `nginx/nginx.conf`，不要把 `baseline/nginx.conf` 当现行配置。
 - `Dockerfile.backend` 的已写明坑：`ARG PIP_INDEX_URL` 默认 aliyun，**海外机构建必须覆盖为
   `https://pypi.org/simple`**（注释原话：海外机访问 aliyun 镜像会卡死）。定 C2 构建位置时要用到。
 
@@ -110,7 +111,8 @@
 
 | 依赖 | 现状 | 解耦方向 |
 |---|---|---|
-| 静态站 `/var/www/genz-web`、`/var/www/saas/dist` | 由 `looma-zervi` CI 投递 | 维持（属产品侧） |
+| 营销站 `/var/www/genz-web` | **已从本机删除**（2026-09-18）；真源 `GenzLTD/genz-web` → Vercel | 本仓不再托管 |
+| 静态站 `/var/www/saas/dist` | tspace 构建产物 | 本仓 nginx 的 tspace root |
 | `szbolent.cn` 门户 `/v1/` → 本机 | 对端反代到本机 API | 对端登记，见 szbolent-cn `CATALOG.md` §三 |
 | 企查查 MCP `1.14.202.161:8998` | 本机后端出网调用 | 外部服务，非本机部署 |
 
@@ -119,8 +121,8 @@
 | # | 事项 | 现状矛盾 | 选项 |
 |---|---|---|---|
 | D1 | **Cloudflare 回源模式** | `nginx.conf:24` 注释写「Flexible → port 80」，`scripts/deploy-overseas.sh` 写「self-signed cert + Full mode」——**同一套部署自相矛盾** | A) Full + Origin 证书 + 放行 443（安全，需 CF 侧操作）；B) 明确 Flexible + 删除 443 块与 HSTS（最小改动，但 CF↔origin 明文） |
-| D2 | 443 上 4 个 HTTPS server 块 + HSTS | 公网不可达 → **死配置**；一旦有人放行 443，客户端会撞自签证书 | 随 D1 一并处置 |
-| ~~D3~~ | ~~镜像未仓库化~~ | **已拍板**：C2 镜像仓库化（Owner 2026-09-18） | 待实施；子项见 `README.md` §八·6 |
+| D2 | 443 上 HTTPS server 块 + HSTS | 公网 443 仍 filtered；摘块后只留 api / tspace | 随 D1 一并处置 |
+| ~~D3~~ | ~~镜像未仓库化~~ | **已拍板**：C2 镜像仓库化 | 待实施；调查笔记见 `docs/LIVE-FORENSICS-2026-09-18.md` |
 | D4 | 发版重写 `.env` | `looma-zervi` 的 `deploy-overseas.yml` 用 `set_kv` 每轮覆盖约 20 键（含 `STRIPE_WEBHOOK_SECRET`）→ 下次 tag 发版会把旧值写回 | 见 `proposals/looma-zervi-set_kv-seed-only.md`（上游补丁） |
 | D5 | 是否挂 Vultr Firewall Group | 当前无云防火墙；ufw 对 Docker 端口无效 | **建议 S4 之后再挂**（只放 22/80）作为容错层；需 Vultr Console 或 API token |
 
@@ -134,6 +136,6 @@
 
 ## 七、归属与治理
 
-- 本仓只管「**本机的部署契约与变更集**」，不含产品代码（C2 落地后改为"本机一切"）。
-- 变更纪律：`baseline/` 冻结现网 → 改 `compose/`、`nginx/` → `scripts/dryrun.sh` 全绿 → 授权后应用 → `scripts/healthcheck.sh` 门禁。
+- 本仓是海外栈的自包含真源：`compose/` `nginx/` `docker/` `backend/`。clone 不依赖 `looma-zervi` 工作副本。
+- 变更纪律：改本仓文件 → `scripts/dryrun.sh` 全绿 → 授权后才动真机。`baseline/` 只作回滚对照，不是期望态。
 - 资源↔主体↔服务的完整对账以 docs 仓《资源-主体-服务对账表》为准。

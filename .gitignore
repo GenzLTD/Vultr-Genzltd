@@ -5,6 +5,11 @@ dryrun/layout/
 .env
 *.env
 !.env.example
+!backend/.env.example
+
+# 后端缓存
+**/__pycache__/
+*.pyc
 
 # 系统
 .DS_Store

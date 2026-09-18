@@ -10,30 +10,12 @@
 #         dry_run=false        → 还要 vars.DEPLOY_ENABLED == 'true'
 #                                 + environment: production 审批，才可能部署
 #
-#   需要配置的参数（由 Owner 在 Settings 里填）见 README §六：
-#     secrets.SSH_PRIVATE_KEY   部署私钥（必填）
-#     vars.DEPLOY_HOST          目标机 IP/域名（必填）
-#     vars.DEPLOY_USER          登录用户（可选，默认 root）
-#     vars.DEPLOY_ENABLED       安全硬开关；不设或非 'true' 时部署 job 永不执行
+#   需要配置的参数见 README「生产机」一节。clone 本地干跑不需要 Secrets。
 #
-#   ⚠️ 2026-09-18 只读核实真机后确认的撞车事实（启用部署前必读）
-#   ---------------------------------------------------------------
-#   1) /opt/looma-zervi 已被 looma-zervi 仓的
-#      .github/workflows/deploy-overseas.yml 接管：它以
-#      `rsync -avz --delete` 全树同步到该目录，源仓 HEAD=a52638e5=线上 health 的
-#      git_commit。而 looma-zervi 仓里的 docker/docker-compose.yml 仍是
-#      "5200:5200"/"8000:8000"/"6379:6379"（8aace57b…，未做 P0）。
-#      → 本仓若把 compose 投到 /opt/looma-zervi/docker/，下一次 overseas-* tag
-#        发布会把 P0「端口收内网」**静默覆盖回 0.0.0.0**，公网重新暴露且无人察觉。
-#      → 因此 P0 必须回灌 looma-zervi 仓，见本仓 README §七。
-#   2) 该流水线调用 compose 的方式是
-#      `docker compose --env-file ${DEPLOY_PATH}/backend/.env -f ... -p looma-zervi`。
-#      若缺 --env-file：${DEPLOY_PATH}/docker/.env 不存在 → shell 也无该变量 →
-#      ${DEPLOY_REGION:-US} 兜成 US，并覆盖 backend/.env 里的 SG
-#      （现役容器实测 DEPLOY_REGION=SG，且 PAYMENT_STUB_MODE=false 真实支付在跑）。
-#      → 本工作流已对齐该调用方式，并加了插值断言做门禁。
-#   3) 本仓脚本一律放独立目录 ${STACK_DIR}，不写进 /opt/looma-zervi：
-#      既不污染对方部署树，也不会被对方的 rsync --delete 清掉。
+#   启用部署前必读 docs/LIVE-FORENSICS-2026-09-18.md：在 looma-zervi 的
+#   overseas-* rsync 停掉之前，把本仓 compose 投到 /opt/looma-zervi/docker/
+#   会被静默盖回 0.0.0.0。DEPLOY_ENABLED 在那之前不要打开。
+#   本地 clone 以本仓 compose/ nginx/ backend/ docker/ 为准，不要去借 looma-zervi。
 #
 #   已证「收内网不会崩」的三条链路（实测）：
 #     · 宿主 nginx upstream looma_backend = 127.0.0.1:5200 → 收内网不影响回源

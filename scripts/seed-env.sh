@@ -10,13 +10,14 @@
 #     1) 环境变量（CI 由 GitHub Secrets 注入，或运维手工 export）
 #     2) 缺失即报错退出（绝不写占位符当真值）
 #
-#   用法（在目标机执行）:
+#   默认写到本仓 backend/.env（本地 clone）。生产机再显式传入路径：
 #     ENV_FILE=/opt/looma-zervi/backend/.env bash scripts/seed-env.sh
 #     bash scripts/seed-env.sh --print-keys     # 只打印键清单，不写文件
 # =============================================================
 set -euo pipefail
 
-ENV_FILE="${ENV_FILE:-/opt/looma-zervi/backend/.env}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="${ENV_FILE:-$ROOT/backend/.env}"
 MODE="${1:-}"
 
 # 目标机 .env 的键清单（26 键，来自现网实测）
