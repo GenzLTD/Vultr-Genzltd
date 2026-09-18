@@ -9,27 +9,19 @@ Runtime (what users hit):
   2. Stripe success/cancel URLs are built in Pricing.tsx from
      window.location.origin — Python does not read STRIPE_SUCCESS_URL.
 
-Config intent only (not runtime):
-  deploy-overseas.yml still writes STRIPE_SUCCESS_URL / CANCEL to
-  ${TSPACE_HOST}. Those env vars are dead until some future backend reads
-  them; the YAML tests below only prevent a silent rollback to ${DOMAIN}.
+Config intent / deployment-pipeline contract tests live in
+  tests/deploy-contract/ (repo-owned, outside this backend snapshot).
+  They guard THIS repo's deploy.yml + bootstrap-env.sh. Do NOT add
+  workflow-file assertions here: backend/ is a pin refreshed from
+  looma-zervi and must stay product-only.
 """
 from __future__ import annotations
 
 import os
 import tempfile
 from contextlib import contextmanager
-from pathlib import Path
-
-import pytest
 
 from src.app import create_app
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-OVERSEAS_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy-overseas.yml"
-PRICING_TSX = (
-    REPO_ROOT / "frontend" / "packages" / "saas" / "src" / "features" / "pricing" / "Pricing.tsx"
-)
 
 
 def _register(client, email, password="secret123"):
@@ -171,56 +163,3 @@ class TestStripeCheckoutStub:
         assert body["session_id"] == "cs_test_mock"
         assert body["session_url"] == "https://checkout.stripe.com/c/pay/cs_test_mock"
         assert body["tier"] == "supporter"
-
-
-class TestOverseasWorkflowContract:
-    def test_workflow_stripe_env_keeps_tspace_host_intent(self):
-        """Config-intent lock only — Python does not read STRIPE_SUCCESS_URL.
-
-        This assertion does NOT prove checkout return URLs work. Runtime
-        redirects are built in Pricing.tsx (see TestStripeReturnUrlSource).
-        Fail here if deploy-overseas.yml rolls Success/Cancel back to ${DOMAIN}.
-        """
-        text = OVERSEAS_WORKFLOW.read_text(encoding="utf-8")
-        success = [
-            line
-            for line in text.splitlines()
-            if "STRIPE_SUCCESS_URL" in line and not line.strip().startswith("#")
-        ]
-        cancel = [
-            line
-            for line in text.splitlines()
-            if "STRIPE_CANCEL_URL" in line and not line.strip().startswith("#")
-        ]
-        assert len(success) >= 2
-        assert len(cancel) >= 2
-        for line in success + cancel:
-            assert "TSPACE_HOST" in line
-            assert "${DOMAIN}/pricing" not in line.replace("\\", "")
-
-    def test_git_commit_marker_is_written_before_compose_up(self):
-        text = OVERSEAS_WORKFLOW.read_text(encoding="utf-8")
-        marker = 'echo "${{ github.sha }}" > "${DEPLOY_PATH}/backend/git_commit.txt"'
-        up = "${COMPOSE} up -d --remove-orphans --force-recreate --no-build backend"
-        assert marker in text
-        assert text.index(marker) < text.index(up)
-
-
-class TestStripeReturnUrlSource:
-    def test_pricing_checkout_uses_window_location_origin(self):
-        """Runtime cashier return URL: browser origin, not a hardcoded domain.
-
-        Users on tspace.genz.ltd therefore return to
-        https://tspace.genz.ltd/pricing?status=success. Hardcoding genz.ltd
-        (or any other host) here would break that contract.
-        """
-        text = PRICING_TSX.read_text(encoding="utf-8")
-        assert "success_url: `${window.location.origin}/pricing?status=success`" in text
-        assert "cancel_url: `${window.location.origin}/pricing?status=cancel`" in text
-        for line in text.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("success_url:") or stripped.startswith("cancel_url:"):
-                assert "window.location.origin" in line
-                assert "genz.ltd" not in line
-                assert "http://" not in line
-                assert "https://" not in line

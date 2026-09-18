@@ -1,0 +1,122 @@
+"""部署契约测试 — 守本仓自己的管线，不随 backend/ 快照刷新。
+
+背景：backend/tests/test_overseas_billing_gate.py 随 looma-zervi 的 backend
+快照整体同步，其中两个契约测试断言的是 looma-zervi 的
+.github/workflows/deploy-overseas.yml——在本仓必然 FileNotFoundError。
+部署契约随部署管线走，本仓（海外部署唯一真源）的部署真源是：
+
+  - .github/workflows/deploy.yml   双门禁扇入 8 步部署
+  - scripts/bootstrap-env.sh        set_kv 非密钥每轮对齐 / seed_kv 密钥不覆盖
+  - .env.example                   环境变量键清单与回调意图
+  - frontend/.../Pricing.tsx       收银台回调 URL 的运行时真源
+
+本文件在快照区（backend/）之外：改本仓管线时同步改这里；
+从 looma-zervi 刷新 backend 钉不会覆盖本文件。
+禁止把 workflow/bootstrap 断言加回 backend/tests/。
+
+可直接运行（dryrun.sh 第 3 步调用，无需 pytest），也可被 pytest 收集。
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEPLOY_YML = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
+BOOTSTRAP_ENV = REPO_ROOT / "scripts" / "bootstrap-env.sh"
+ENV_EXAMPLE = REPO_ROOT / ".env.example"
+PRICING_TSX = (
+    REPO_ROOT / "frontend" / "packages" / "saas" / "src" / "features" / "pricing" / "Pricing.tsx"
+)
+
+TSPACE_SUCCESS = "https://tspace.genz.ltd/pricing?status=success"
+TSPACE_CANCEL = "https://tspace.genz.ltd/pricing?status=cancel"
+
+
+class TestStripeHostIntent:
+    """Config-intent lock only — Python 不读 STRIPE_SUCCESS_URL。
+
+    运行时回调用 Pricing.tsx 的 window.location.origin（见
+    TestPricingReturnUrlSource）。这里防止的是 bootstrap-env.sh /
+    .env.example 把回调意图滚回裸域 genz.ltd。
+    """
+
+    def test_bootstrap_env_writes_tspace_host(self):
+        text = BOOTSTRAP_ENV.read_text(encoding="utf-8")
+        assert f"set_kv STRIPE_SUCCESS_URL {TSPACE_SUCCESS}" in text, (
+            "bootstrap-env.sh 必须以 set_kv 写入 tspace 回调 Success URL"
+        )
+        assert f"set_kv STRIPE_CANCEL_URL {TSPACE_CANCEL}" in text, (
+            "bootstrap-env.sh 必须以 set_kv 写入 tspace 回调 Cancel URL"
+        )
+        for line in text.splitlines():
+            if "STRIPE_SUCCESS_URL" in line or "STRIPE_CANCEL_URL" in line:
+                assert "tspace.genz.ltd" in line, f"回调意图滚回非 tspace 域: {line}"
+
+    def test_env_example_matches_intent(self):
+        text = ENV_EXAMPLE.read_text(encoding="utf-8")
+        assert f"STRIPE_SUCCESS_URL={TSPACE_SUCCESS}" in text
+        assert f"STRIPE_CANCEL_URL={TSPACE_CANCEL}" in text
+
+    def test_stripe_secrets_are_seed_kv_not_set_kv(self):
+        """密钥只允许 seed_kv（缺失才写），禁止 set_kv 每轮覆盖。
+
+        set_kv 会把机器上的 Live 验签密钥打回旧值（looma-zervi #19
+        钉死的反漂移不变量，在本仓的等价物）。
+        """
+        text = BOOTSTRAP_ENV.read_text(encoding="utf-8")
+        for key in ("STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"):
+            seed = [l for l in text.splitlines() if f"seed_kv {key}" in l]
+            overwrite = [l for l in text.splitlines() if f"set_kv {key}" in l]
+            assert seed, f"{key} 必须有 seed_kv 行"
+            assert not overwrite, f"{key} 是密钥，禁止 set_kv 覆盖: {overwrite}"
+
+
+class TestDeployOrder:
+    def test_git_commit_marker_is_written_before_compose_up(self):
+        """版本溯源标记必须先于任何 compose up 写入（对齐 looma-zervi 契约）。"""
+        lines = DEPLOY_YML.read_text(encoding="utf-8").splitlines()
+        marker = [i for i, l in enumerate(lines)
+                  if "github.sha" in l and "git_commit.txt" in l]
+        ups = [i for i, l in enumerate(lines)
+               if " up -d" in l and "backend" in l]
+        assert marker, "deploy.yml 必须写 git_commit 标记"
+        assert ups, "deploy.yml 必须有 compose up 步骤"
+        assert min(marker) < min(ups), "git_commit 必须先于第一个 compose up"
+
+
+class TestPricingReturnUrlSource:
+    def test_pricing_checkout_uses_window_location_origin(self):
+        """运行时收银台回调：浏览器 origin，不是硬编码域。
+
+        tspace.genz.ltd 上的用户因此回到
+        https://tspace.genz.ltd/pricing?status=success。在这里硬编码
+        genz.ltd（或任何其他域）都会破坏该契约。
+        """
+        text = PRICING_TSX.read_text(encoding="utf-8")
+        assert "success_url: `${window.location.origin}/pricing?status=success`" in text
+        assert "cancel_url: `${window.location.origin}/pricing?status=cancel`" in text
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("success_url:") or stripped.startswith("cancel_url:"):
+                assert "window.location.origin" in line
+                assert "genz.ltd" not in line
+                assert "http://" not in line
+                assert "https://" not in line
+
+
+if __name__ == "__main__":
+    import sys
+
+    failures = 0
+    for cls_name in sorted(n for n in dir() if n.startswith("Test")):
+        cls = globals()[cls_name]
+        for meth_name in sorted(m for m in dir(cls) if m.startswith("test_")):
+            label = f"{cls_name}.{meth_name}"
+            try:
+                getattr(cls(), meth_name)()
+            except Exception as exc:  # noqa: BLE001 — 直接运行模式要逐项报全
+                failures += 1
+                print(f"  \033[31m✗\033[0m {label}: {exc}")
+            else:
+                print(f"  \033[32m✓\033[0m {label}")
+    sys.exit(1 if failures else 0)

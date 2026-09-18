@@ -23,6 +23,7 @@ Vultr 海外机（`api.genz.ltd` / `tspace.genz.ltd`，以及后续 `circle.genz
 | 镜像构建 | `docker/Dockerfile.backend` |
 | 环境变量键清单 | `.env.example`（真值永不入库） |
 | 本地校验 | `scripts/dryrun.sh` |
+| 部署契约测试（守本仓管线） | `tests/deploy-contract/`（在 backend/ 快照区之外，刷新钉不覆盖） |
 | 打发版 tag | `scripts/release-tag.sh` |
 | 按 tag 回滚 | `scripts/rollback-tag.sh` |
 | 可选：Windows ServBay 旁路演示 | `local/`（只绑 18080/18081/18082） |
@@ -89,13 +90,14 @@ bash scripts/dryrun.sh
 
 1. 在本仓内补齐 `data/` 空目录，以及（仅当不存在时）用 `.env.example` 生成 `backend/.env` 桩——**不含真密钥**
 2. 校验 `contracts/gfcc`（SOURCE 钉、家族版本、仓内 `$ref`）
-3. 对本仓 `compose/docker-compose.yml` 做 `docker compose config`
-4. 断言唯一允许发布的宿主端口是 `127.0.0.1:5200`
-5. 用容器跑 `nginx -t`（本仓 `nginx/nginx.conf`）
-6. 断言 nginx **没有**裸域 `server_name`；`circle.genz.ltd` 只在 `nginx/sites/`，未混进现行 conf
-7. （全量）证明 `127.0.0.1` 绑定在其它网卡不可达
+3. 跑 `tests/deploy-contract/`（守 `deploy.yml` 顺序、Stripe tspace 回调意图、`Pricing.tsx` 回调源）
+4. 对本仓 `compose/docker-compose.yml` 做 `docker compose config`
+5. 断言唯一允许发布的宿主端口是 `127.0.0.1:5200`
+6. 用容器跑 `nginx -t`（本仓 `nginx/nginx.conf`）
+7. 断言 nginx **没有**裸域 `server_name`；`circle.genz.ltd` 只在 `nginx/sites/`，未混进现行 conf
+8. （全量）证明 `127.0.0.1` 绑定在其它网卡不可达
 
-退出码 0 才算过。Windows 用 Git Bash 或 WSL 跑上述脚本（仓库里没有 bash.exe 时，ServBay 的 `packages\git\usr\bin\sh.exe` 也可以）。不要用本机系统 nginx 去替代第 4 步。若 Git Bash 找不到 Python，指定后重跑：
+退出码 0 才算过。Windows 用 Git Bash 或 WSL 跑上述脚本（仓库里没有 bash.exe 时，ServBay 的 `packages\git\usr\bin\sh.exe` 也可以）。不要用本机系统 nginx 去替代第 6 步。若 Git Bash 找不到 Python，指定后重跑：
 
 ```bash
 export PYTHON_BIN=/c/path/to/python.exe

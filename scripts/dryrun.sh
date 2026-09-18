@@ -5,11 +5,12 @@
 #   只依赖本仓目录树，不组装 /opt/looma-zervi，不要求旁边有 looma-zervi。
 #     1) 本仓内补齐 data/ 与 backend/.env 桩
 #     2) GFCC 契约层（SOURCE 钉 + JSON + $ref）
-#     3) docker compose config 语法校验
-#     4) 端口收内网断言：唯一允许发布的宿主端口是 127.0.0.1:5200
-#     5) nginx -t（容器内 nginx，读本仓 nginx/nginx.conf）
-#     6) 裸域 Host 不得回归 + circle 片段在仓、未进现行 conf + compose 相对 baseline
-#     7) 运行时：回环绑定在其它网卡上不可达
+#     3) 部署契约测试（tests/deploy-contract/，守 deploy.yml 顺序与 Stripe tspace 意图）
+#     4) docker compose config 语法校验
+#     5) 端口收内网断言：唯一允许发布的宿主端口是 127.0.0.1:5200
+#     6) nginx -t（容器内 nginx，读本仓 nginx/nginx.conf）
+#     7) 裸域 Host 不得回归 + circle 片段在仓、未进现行 conf + compose 相对 baseline
+#     8) 运行时：回环绑定在其它网卡上不可达
 #
 #   用法:
 #     bash scripts/dryrun.sh            # 全量
@@ -90,7 +91,16 @@ else
 fi
 
 # -------------------------------------------------------------
-hdr 3 "docker compose 语法校验"
+hdr 3 "部署契约测试（deploy.yml / bootstrap-env.sh / Pricing.tsx）"
+# 纯文本断言，无需 pytest/backend 依赖；独立于 backend/ 快照区。
+if runpy "$ROOT/tests/deploy-contract/test_deploy_contract.py"; then
+  ok "部署契约测试通过"
+else
+  no "部署契约测试失败"
+fi
+
+# -------------------------------------------------------------
+hdr 4 "docker compose 语法校验"
 if docker compose -f "$COMPOSE" --project-directory "$ROOT/compose" config -q 2>"$ERR_DIR/compose.err"; then
   ok "compose 语法通过"
   rm -f "$ERR_DIR/compose.err"
@@ -100,7 +110,7 @@ else
 fi
 
 # -------------------------------------------------------------
-hdr 4 "端口收内网断言（唯一允许发布: ${ALLOWED_PUBLISHED}）"
+hdr 5 "端口收内网断言（唯一允许发布: ${ALLOWED_PUBLISHED}）"
 RENDERED="$ERR_DIR/rendered.json"
 if docker compose -f "$COMPOSE" --project-directory "$ROOT/compose" config --format json >"$RENDERED" 2>/dev/null; then
   runpy - "$RENDERED" "$ALLOWED_PUBLISHED" <<'PY'
@@ -143,7 +153,7 @@ else
 fi
 
 # -------------------------------------------------------------
-hdr 5 "nginx -t 语法校验"
+hdr 6 "nginx -t 语法校验"
 img=""
 for cand in "$NGINX_IMAGE" nginx:1.20 nginx:alpine; do
   if docker pull -q "$cand" >/dev/null 2>&1; then img="$cand"; break; fi
@@ -169,7 +179,7 @@ else
 fi
 
 # -------------------------------------------------------------
-hdr 6 "期望态断言（本仓 nginx / compose，不是生产机路径）"
+hdr 7 "期望态断言（本仓 nginx / compose，不是生产机路径）"
 runpy - "$NGINX_CONF" <<'PY'
 import re, sys
 path = sys.argv[1]
@@ -250,7 +260,7 @@ PY
 [ $? -ne 0 ] && fail=1
 
 # -------------------------------------------------------------
-hdr 7 "运行时语义实证：回环绑定在其它网卡不可达"
+hdr 8 "运行时语义实证：回环绑定在其它网卡不可达"
 if [ "$RUNTIME" -eq 0 ]; then
   echo "     （--static 已跳过）"
 elif [ -z "$img" ]; then
