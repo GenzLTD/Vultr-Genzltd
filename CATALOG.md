@@ -16,7 +16,56 @@
 
 **服务启动来源**：`/opt/looma-zervi/docker/docker-compose.yml`（`docker inspect` 标签实证）。
 
-## 二、防火墙（ufw）
+## 二、运行环境（2026-09-18 只读探明）
+
+### 2.1 平台与运行时
+
+| 项 | 实测值 | 含义 |
+|---|---|---|
+| 主机 | Vultr **VHP** · Ubuntu 22.04.5 LTS · kernel 5.15.0-185 · hostname `genz-ltd` · region **SG(SGP)** | — |
+| Docker | **29.6.1**（client = server）· storage `overlayfs` · cgroup **v2** · root `/var/lib/docker` | 容器化早已成立 |
+| Compose | **v5.3.1 插件**；**无**独立 `docker-compose` | 只能用 `docker compose`（连字符版会 not found） |
+| 编排归属 | project=`looma-zervi` · cfg=`/opt/looma-zervi/docker/docker-compose.yml` · wd=`/opt/looma-zervi/docker` | 本仓此前的全部假设成立 |
+| 磁盘 | `/` 94G，用 24G，**余 67G** | 拉镜像空间充裕 |
+| 内存 | 3.9G（可用 3.0G） | 在真机构建偏紧，CI 构建更合适 |
+| 磁盘占用 | 镜像 1.93G · **build cache 5.06G（可回收 4.02G）** | build cache = "曾在真机构建"的痕迹 |
+| 出口连通 | `ghcr.io/v2/` → **401**（正常鉴权挑战）· `registry-1.docker.io/v2/` → **401** | **镜像仓库化的网络前提成立** |
+
+### 2.2 关键事实：镜像只装依赖，代码靠 bind mount
+
+`Dockerfile.backend` 注释原话「应用代码由 compose volume 挂载，镜像只装依赖」。
+实测印证：容器 `Created=2026-09-17T13:27Z`，而镜像 `looma-zervi-backend` **Created=2026-09-03T16:30Z**
+——**镜像两周未重建**。
+
+| 类型 | 源 | 目标 | rw |
+|---|---|---|---|
+| bind | `/opt/looma-zervi/backend` | `/app` | ✅ |
+| bind | `/opt/looma-zervi/data/poetry_full` | `/app/poetry_data` | ❌ |
+| bind | `/opt/looma-zervi/data/chroma_models` | `/root/.cache/chroma/onnx_models` | ✅ |
+| volume | `looma-zervi_backend-data` | `/app/data` | ✅ |
+| volume | `looma-zervi_chroma-data` | `/app/chroma_data` | ✅ |
+
+**两个推论**：
+1. **P0 无需重建镜像**——端口只在 compose 里，`up -d` 即生效（这也解释了 P0 的 502 只有几秒量级）。
+2. **C2（镜像仓库化）不是小改**——它必须删掉 `backend/` 这条 bind mount、把代码 `COPY` 进镜像。
+
+### 2.3 版本锚点现状（脆弱）
+
+- `backend/git_commit.txt` = **`a52638e5017de7eb18171ab6af0769aadeb53038`**（root，09-17 13:27）——旧流水线写入，**目前唯一的版本锚点**。
+- `/opt/looma-zervi/.git` 存在，但是**零 commit 的空仓**：`branch main` 却 `git log` 报
+  *"does not have any commits yet"*，所有文件 `??` untracked（`.git` 由 root 于 09-18 04:28 创建）。
+  → **git 无法用于版本对账或回滚**。C2 落地后应以**镜像 digest** 取代该锚点。
+
+### 2.4 其他实测
+
+- `/etc/nginx/sites-enabled/` **为空**，nginx **1.18.0** 全靠 `/etc/nginx/nginx.conf` 内嵌 server 块
+  → "改 nginx 只需改这一个文件"成立。
+- 基线仍精确：`docker-compose.yml` md5 = `8aace57b…`、`nginx.conf` = `0f505e33…`
+  → 与 `baseline/` **逐字节一致，P0 确实未落**。
+- `Dockerfile.backend` 的已写明坑：`ARG PIP_INDEX_URL` 默认 aliyun，**海外机构建必须覆盖为
+  `https://pypi.org/simple`**（注释原话：海外机访问 aliyun 镜像会卡死）。定 C2 构建位置时要用到。
+
+## 三、防火墙（ufw）
 
 | 端口 | 状态 |
 |---|---|
@@ -26,23 +75,38 @@
 
 ### ⚠️ 关键事实：ufw 挡不住 Docker 发布的端口
 
-`DOCKER-USER` 链为空（`iptables -S DOCKER-USER` 仅 `-N`），而 Docker 发布端口走
+`DOCKER-USER` 链为空（`iptables -S DOCKER-USER` 仅 `-N`），`/etc/ufw/after.rules` 中
+`DOCKER-USER` 出现 **0** 次，且未装 `ufw-docker`。Docker 发布端口走
 `nat/PREROUTING → DOCKER` 链 DNAT，**不经过 INPUT**，因此 ufw 的 `-P INPUT DROP` 对其无效。
 
 **实测（2026-09-18，从公网）**：
 
-| 端口 | 结果 |
-|---|---|
-| 22 / 80 | 通（预期） |
-| **5200** | **通**（绕过 nginx 的限流与审计） |
-| **6379** | **通**（Redis 无认证 → 可读写/清空限流存储） |
-| **8000** | **通**（ChromaDB 裸露） |
-| 443 | timeout（nginx 是宿主进程，受 ufw 管辖，未放行） |
+| 端口 | 发布者 | ufw 是否管辖 | 结果 |
+|---|---|---|---|
+| 22 / 80 | 宿主 `sshd` / `nginx` | ✅ | 通（预期） |
+| **5200** | `docker-proxy` | ❌ | **通**（绕过 nginx 的限流与审计） |
+| **6379** | `docker-proxy` | ❌ | **通**（Redis 无认证 → 可读写/清空限流存储） |
+| **8000** | `docker-proxy` | ❌ | **通**（ChromaDB 裸露） |
+| 443 | 宿主 `nginx`（在 `0.0.0.0:443` 监听中） | ✅ | **filtered**（ufw 未放行 443） |
+
+**这一组数字本身就是"云防火墙是否在生效"的对照实验**：同一次探测、同一个 ufw，
+宿主进程的 443 被拦下（受 ufw 管辖），Docker 的 5200/6379/8000 却穿透
+→ ① 主机层 ufw 对 Docker 端口无效；② **当前没有任何云防火墙在遮挡**。
 
 → 故 szbolent-cn 的「**安全组 + 容器绑定双保险**」在 Vultr 上**第二层缺失**，
 本仓 P0 即补此层（`compose/docker-compose.yml` 端口收内网）。
 
-## 三、已知跨机依赖
+### ⚠️ 云安全组的能力边界（回答"自动化部署 + 人工控制安全组"）
+
+- Vultr 的 **Firewall Group 属数据中心层**，机器内部（含 metadata `169.254.169.254`）**读不到**，
+  只能在 Vultr Console 人工配置、或用 Vultr API 自动化。
+- 本机**没有** `VULTR_API_KEY` / `vultr-cli` / `terraform`
+  → 要**自动化**控制安全组，须先提供 Vultr API token；否则只能是**人工 Console 操作**。
+- **加云防火墙会削弱验收力**：一旦挂上"只放 22/80"，公网打不通 5200 将变成**恒真**
+  （无论容器绑 `0.0.0.0` 还是 `127.0.0.1`），公网探针从"强判据"退化为"假阳性"。
+  → 分工必须固定：**`docker port` = 正确性判据；云防火墙 = 容错层**，不可互相替代。
+
+## 四、已知跨机依赖
 
 | 依赖 | 现状 | 解耦方向 |
 |---|---|---|
@@ -50,17 +114,26 @@
 | `szbolent.cn` 门户 `/v1/` → 本机 | 对端反代到本机 API | 对端登记，见 szbolent-cn `CATALOG.md` §三 |
 | 企查查 MCP `1.14.202.161:8998` | 本机后端出网调用 | 外部服务，非本机部署 |
 
-## 四、待决事项（需 Owner 定，不在 P0 内擅自改）
+## 五、待决事项（需 Owner 定，不在 P0 内擅自改）
 
 | # | 事项 | 现状矛盾 | 选项 |
 |---|---|---|---|
 | D1 | **Cloudflare 回源模式** | `nginx.conf:24` 注释写「Flexible → port 80」，`scripts/deploy-overseas.sh` 写「self-signed cert + Full mode」——**同一套部署自相矛盾** | A) Full + Origin 证书 + 放行 443（安全，需 CF 侧操作）；B) 明确 Flexible + 删除 443 块与 HSTS（最小改动，但 CF↔origin 明文） |
 | D2 | 443 上 4 个 HTTPS server 块 + HSTS | 公网不可达 → **死配置**；一旦有人放行 443，客户端会撞自签证书 | 随 D1 一并处置 |
-| D3 | 镜像未仓库化 | compose 依赖产品树相对路径 → 无法"一机一仓"自包含 | P2：CI 构建镜像推 registry，compose 只留 `image:` |
+| ~~D3~~ | ~~镜像未仓库化~~ | **已拍板**：C2 镜像仓库化（Owner 2026-09-18） | 待实施；子项见 `README.md` §八·6 |
 | D4 | 发版重写 `.env` | `looma-zervi` 的 `deploy-overseas.yml` 用 `set_kv` 每轮覆盖约 20 键（含 `STRIPE_WEBHOOK_SECRET`）→ 下次 tag 发版会把旧值写回 | 见 `proposals/looma-zervi-set_kv-seed-only.md`（上游补丁） |
+| D5 | 是否挂 Vultr Firewall Group | 当前无云防火墙；ufw 对 Docker 端口无效 | **建议 S4 之后再挂**（只放 22/80）作为容错层；需 Vultr Console 或 API token |
 
-## 五、归属与治理
+## 六、决策记录
 
-- 本仓只管「**本机的部署契约与变更集**」，不含产品代码。
+| 日期 | 决策 | 依据 |
+|---|---|---|
+| 2026-09-18 | **本仓 = 海外部署唯一真源**；`looma-zervi` 的 `deploy-overseas.yml` 废弃 | Owner 口径 |
+| 2026-09-18 | **S6 = C2 镜像仓库化**（compose 只留 `image:`，栈目录自包含） | Owner 选择；网络前提已实证（§2.1 出口 401） |
+| 2026-09-18 | **端口临时访问只走 SSH 隧道**，不开公网窗口 | Owner 口径 |
+
+## 七、归属与治理
+
+- 本仓只管「**本机的部署契约与变更集**」，不含产品代码（C2 落地后改为"本机一切"）。
 - 变更纪律：`baseline/` 冻结现网 → 改 `compose/`、`nginx/` → `scripts/dryrun.sh` 全绿 → 授权后应用 → `scripts/healthcheck.sh` 门禁。
 - 资源↔主体↔服务的完整对账以 docs 仓《资源-主体-服务对账表》为准。

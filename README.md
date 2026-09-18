@@ -175,12 +175,12 @@ looma-zervi 的流水线以
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| S1 现况探明 | 真机只读核实（见上） | ✅ 完成 |
+| S1 现况探明 | 真机只读核实（§七 撞车事实 + §八 运行环境与可行性） | ✅ 完成 |
 | S2 契约归集 | 本仓持有 compose / nginx / scripts，且**部署终态 = 端口收内网** | ✅ 已具备 |
 | S3 本地实测 | `dryrun.sh` 全绿 + 工作流 YAML 可解析 | ✅ |
 | S4 本仓部署 | 本仓投递并重建；含端口收敛断言 + 公网不可达断言 + 失败回滚 | ⬜ 待授权执行 |
 | S5 旧通道废弃 | 停用 `looma-zervi` 的部署段，消除 rsync 覆盖 | ⬜ S4 成功后立即执行 |
-| S6 代码投递归属 | 见下「仍有待决」 | ⬜ |
+| S6 代码投递归属 | **C2 镜像仓库化**（Owner 2026-09-18 拍板）；子项见 §八·6 | ⬜ 待实施 |
 
 **端口口径（Owner 2026-09-18）**：端口「公开 / 收内网」由**部署流程掌控**——每次部署的
 **终态**必须是收内网，并由两道独立门禁把关：**服务端 `docker port` 权威断言** +
@@ -190,20 +190,95 @@ looma-zervi 的流水线以
 **S5 之前必须知道的风险窗**：只要 `deploy-overseas.yml` 还没停用，一次 `overseas-*` tag
 发布就会用 rsync 把端口收敛**覆盖回 `0.0.0.0`**。故 S4 成功后应尽快执行 S5。
 
-### 仍有待决（影响 S6，不挡 S4/S5）
+### S6 已拍板：C2 镜像仓库化（Owner 2026-09-18）
 
-**产品代码怎么进入本机** —— §二 原写「产品代码仍由 `looma-zervi` 的 CI 投递，本仓不接管
-代码部署」，而"唯一真源"要求改写这条（`CATALOG.md` D3 即此）。三选一：
-
-| 选项 | 做法 | 代价 |
+| 选项 | 做法 | 取舍 |
 |---|---|---|
-| C1（最小） | 本仓工作流按 `PRODUCT_REF` 拉 `looma-zervi` 指定 ref，只同步 `backend/`、`data/`、前端构建产物；`docker/` 归本仓、**永不被产品同步覆盖** | 需给 CI 配拉另一私有仓的凭据 |
-| C2（最正，= CATALOG D3/P2） | CI 构建镜像推 registry，compose 只留 `image:`；栈目录彻底自包含，可迁出 `/opt/looma-zervi` | 动镜像构建与镜像仓库，改动面最大 |
-| C3（过渡） | 产品代码仍由 looma-zervi 投递，但把它的 rsync 排除 `docker/`（栈归本仓） | 与"废弃旧通道"目标冲突，仅过渡 |
+| C1 拉指定 ref | 本仓按 `PRODUCT_REF` 拉 `looma-zervi`，只同步 `backend/`、`data/`、前端产物 | 过渡可用，仍依赖对方仓与相对路径 |
+| **C2 镜像仓库化（已选）** | CI 构建镜像推 registry，compose 只留 `image:`；栈目录自包含，可迁出 `/opt/looma-zervi` | 改动面最大，一劳永逸；**须放弃 `backend/` bind mount** |
+| C3 过渡排除 | 对方 rsync 排除 `docker/` | 与"废弃旧通道"冲突 |
 
-在 C1/C2/C3 定下来之前，**S4/S5 照常可做**——P0 只动 `compose/`，不需要产品代码。
+C2 有一个**必须提前知道**的代价（§八·2 有实证）：现状是"镜像只装依赖 + 代码 `bind mount`"，
+且 `looma-zervi-backend` 镜像自 **2026-09-03** 起未重建过。C2 之后代码进镜像，
+**改一行后端代码 = 重建镜像 + 推 + 拉**，不再能"同步文件 + 重启"。
+换来的是硬版本锚点（镜像 digest），取代现在那个脆弱的 `backend/git_commit.txt`（§八·3）。
 
-### 顺带实证：`CATALOG.md` §四 待决 D1（Cloudflare 回源模式）
+## 八、真机运行环境实证与可行性（S1 详证 · 2026-09-18 只读）
+
+### 8.1 平台与运行时
+
+| 项 | 实测值 | 含义 |
+|---|---|---|
+| 主机 | Vultr **VHP** · Ubuntu 22.04.5 LTS · kernel 5.15.0-185 · hostname `genz-ltd` · region **SG(SGP)** | — |
+| Docker | **29.6.1** · storage `overlayfs` · cgroup **v2** · root `/var/lib/docker` | **容器化早已成立** ✅ |
+| Compose | **v5.3.1 插件**；**无**独立 `docker-compose` | 只能用 `docker compose`（连字符版会 not found） |
+| 编排归属 | project=`looma-zervi` · cfg=`/opt/looma-zervi/docker/docker-compose.yml` · wd=`/opt/looma-zervi/docker` | 本仓此前的全部假设成立 |
+| 资源 | `/` 94G（用 24G，**余 67G**）· 内存 3.9G（可用 3.0G） | 拉镜像充裕；**在真机构建偏紧，CI 构建更合适** |
+| 磁盘占用 | 镜像 1.93G · **build cache 5.06G（可回收 4.02G）** | build cache = "曾在真机构建"的痕迹 |
+| 出口连通 | `ghcr.io/v2/` → **401** · `registry-1.docker.io/v2/` → **401**（均为正常鉴权挑战） | **镜像仓库化的网络前提成立** ✅ |
+
+### 8.2 镜像只装依赖，代码靠 bind mount
+
+`Dockerfile.backend` 注释原话「应用代码由 compose volume 挂载，镜像只装依赖」。实测印证：
+容器 `Created=2026-09-17T13:27Z`，而镜像 `looma-zervi-backend` **Created=2026-09-03T16:30Z**
+——**镜像两周未重建**。
+
+| 类型 | 源 | 目标 | rw |
+|---|---|---|---|
+| bind | `/opt/looma-zervi/backend` | `/app` | ✅ |
+| bind | `/opt/looma-zervi/data/poetry_full` | `/app/poetry_data` | ❌ |
+| bind | `/opt/looma-zervi/data/chroma_models` | `/root/.cache/chroma/onnx_models` | ✅ |
+| volume | `looma-zervi_backend-data` | `/app/data` | ✅ |
+| volume | `looma-zervi_chroma-data` | `/app/chroma_data` | ✅ |
+
+**推论**：① **P0 无需重建镜像**，端口只在 compose 里，`up -d` 即生效；
+② **C2 不是小改**，它必须删掉 `backend/` 这条 bind mount、把代码 `COPY` 进镜像。
+
+### 8.3 安全组能力（Q2 的正面回答）
+
+- Vultr 的 **Firewall Group 属数据中心层**，机器内部（含 metadata `169.254.169.254`）**读不到**，
+  只能 **Vultr Console 人工配置**，或用 **Vultr API 自动化**。
+- 本机**没有** `VULTR_API_KEY` / `vultr-cli` / `terraform`
+  → **要自动化控制安全组，须先提供 Vultr API token**；否则只能人工 Console 操作。
+- **"安全组现在有没有生效"不需要 API 就能判定**——§七 那组端口实测本身就是对照实验：
+  同一次探测、同一个 ufw，宿主进程的 **443 被拦下**，Docker 的 **5200/6379/8000 穿透**
+  → ① 主机层 ufw 对 Docker 端口无效；② **当前没有任何云防火墙在遮挡**。
+
+### 8.4 ⚠️ 必须纠正的验证逻辑：云防火墙会「削弱」验收力
+
+你的顾虑是"否则你无法验证成功与否"。这里有个反直觉但关键的点：
+
+| 判据 | 无云防火墙（现状） | 挂了"只放 22/80"的云防火墙之后 |
+|---|---|---|
+| 公网探 5200/6379/8000 打不通 | **强判据**：没有别的东西遮挡 ⇒ 打不通就是容器真的收内网了 | **假阳性**：容器绑 `0.0.0.0` 还是 `127.0.0.1` 都打不通 → 判据失效 |
+| `docker port` 断言 | 判"绑对了没有" | 判"绑对了没有"（**此时唯一有效**） |
+
+分工固定、不可互相替代：**`docker port` = 正确性判据；云防火墙 = 容错层。**
+
+**落地次序建议**：
+1. **先在"无云防火墙"状态下做 S4**——此刻公网探针最强，一次就能证明 P0 真的生效；
+2. S4 通过**之后**再挂 Vultr Firewall Group（只放 22/80）当防呆层：将来若有人把端口改回 `0.0.0.0`，
+   `docker port` 断言会失败（正确性），防火墙保证不泄露（容错），两层都在岗；
+3. **不加**"部署时临时开放安全组"的窗口——容器层收内网本身就是终态；要临时访问走 SSH 隧道（你已选）。
+
+### 8.5 版本锚点现状（脆弱，C2 必须换掉）
+
+- `backend/git_commit.txt` = **`a52638e5017de7eb18171ab6af0769aadeb53038`**（root，09-17 13:27）——旧流水线写入，**目前唯一锚点**。
+- `/opt/looma-zervi/.git` 存在但是**零 commit 的空仓**：`branch main` 却报
+  *"does not have any commits yet"*，全部文件 `??` untracked（`.git` 由 root 于 09-18 04:28 建）。
+  → **git 不可用于版本对账或回滚**；C2 落地后以**镜像 digest** 取代该锚点。
+
+### 8.6 C2 仍未定的子项
+
+| # | 子项 | 已知约束 |
+|---|---|---|
+| 1 | registry 选型 | `ghcr.io` 已验证可达（401 鉴权挑战）；也可选 Vultr Container Registry / 自建 |
+| 2 | 构建位置 | GitHub runner 构建（推荐，真机内存仅 3.9G）vs 真机构建（需 `--build-arg PIP_INDEX_URL=https://pypi.org/simple`） |
+| 3 | 镜像 tag 策略 | digest 锁定（可复现）vs tag 漂移（好读）；建议**双轨**：不可变 tag + 部署时记 digest |
+| 4 | 前端静态产物 | `/var/www/genz-web`、`/var/www/saas/dist` 是由 CI 投递的宿主文件，**不在容器内** → 是否一并纳入"栈自包含" |
+| 5 | 迁移方式 | 保留 `/opt/looma-zervi` 布局（最小风险）vs 迁到独立目录（真正自包含） |
+
+### 顺带实证：`CATALOG.md` §五 待决 D1（Cloudflare 回源模式）
 
 nginx 与部署脚本是按 **Cloudflare Full + 自签 origin 证书**准备的
 （`/etc/nginx/ssl/fullchain.pem`；`deploy-overseas.yml` 注释明写 "Origin TLS for Cloudflare Full mode"）。
