@@ -1,8 +1,10 @@
 # Vultr-Genzltd
 
-Vultr 海外机（`api.genz.ltd` / `tspace.genz.ltd`，以及后续 `circle.genz.ltd`）的**自包含部署仓**。
+Vultr 海外机（`api.genz.ltd` / `tspace.genz.ltd`，以及后续 `circle.genz.ltd`）的**海外运行时仓**。
 
-版本迭代的真源是 **GFCC 契约层 + `stack-v*` 不可变 tag**，不是手改现网。clone 之后以本仓为唯一依据做本地干跑和构建。不要再 clone `looma-zervi`，不要在笔记本上建 `/opt/looma-zervi`，也不要按 ServBay / 某台 Mac 的路径去对齐。
+**唯一协议真源是 GFCC**（`contracts/gfcc/`，写作汇合处 `GenzLTD/gfcc`）。本来要的是**一套** looma 后端同时服务境内和海外。备案和管辖把它拆成两套运行时：境内 `looma-zervi`，海外本仓。两边对齐的不是代码树，是这份契约。实现按管辖分叉——支付、身份、Host、发版管线都可以变；契约的字段、枚举、入口变了才升版本。
+
+本仓是**海外部署与海外实现**的真源（compose / nginx / Stripe / `stack-v*`），不是现网 `/opt` 的复刻，也不是 `looma-zervi` 的冻结钉。`backend/` 按海外环境改；clone 之后以本仓干跑和构建，不要再借 `looma-zervi` 补路径。
 
 范本：`GenzLTD/szbolent-cn`（一机一仓、clone 即可干跑）。
 
@@ -14,16 +16,17 @@ Vultr 海外机（`api.genz.ltd` / `tspace.genz.ltd`，以及后续 `circle.genz
 
 | 你要动的 | 只改这里 |
 |---|---|
-| GFCC 契约钉（协议版本） | `contracts/gfcc/`（写作真源仍是 `GenzLTD/gfcc`） |
+| GFCC 契约（两套运行时的共享协议） | `contracts/gfcc/`（协议可以升版本；实现不必等国内仓先合） |
 | tspace 前端（CI 打 dist） | `frontend/packages/saas`（依赖 `frontend/packages/shared-core`） |
 | 容器端口与服务 | `compose/docker-compose.yml` |
 | Host 分流（现行：api + tspace） | `nginx/nginx.conf` |
 | `circle.genz.ltd` 片段 | `nginx/sites/`（默认不进现行 conf） |
-| 后端代码（海外栈这一份） | `backend/` |
+| 后端代码（海外运行时，可按管辖分叉） | `backend/`（起步拷贝见 `backend/SOURCE.json`；协议不在这里） |
 | 镜像构建 | `docker/Dockerfile.backend` |
 | 环境变量键清单 | `.env.example`（真值永不入库） |
 | 本地校验 | `scripts/dryrun.sh` |
-| 部署契约测试（守本仓管线） | `tests/deploy-contract/`（在 backend/ 快照区之外，刷新钉不覆盖） |
+| 部署管线契约 | `tests/deploy-contract/`（管线层，不放进 `backend/`） |
+| 与境内的区别归集 | `docs/looma-overseas/`（对照册，不是第三套代码） |
 | 打发版 tag | `scripts/release-tag.sh` |
 | 按 tag 回滚 | `scripts/rollback-tag.sh` |
 | 可选：Windows ServBay 旁路演示 | `local/`（只绑 18080/18081/18082） |
@@ -37,8 +40,9 @@ Vultr 海外机（`api.genz.ltd` / `tspace.genz.ltd`，以及后续 `circle.genz
 | 笔记本上的 `/opt/looma-zervi` | 那是 **Vultr 生产机** 上的历史目录，不是本地布局。干跑不再组装这份假树 |
 | `GenzLTD/genz-web` / Vercel 裸域 | 营销站生产仍在 Vercel。**生产** `nginx/nginx.conf` **不得**再出现 `server_name genz.ltd` / `www.genz.ltd`。本机若要用 `local/` 仿真官网，只允许绑 18080，不得占用 80/443 |
 | 本机 ServBay 的 80/443 | 与本仓生产期望态无关。旁路演示见 `local/` |
+| 把 `backend/` 当 looma 冻结钉、等国内 PR 再覆盖 | 海外实现以本仓为准；协议以 GFCC 为准。参考国内实现可以，整树覆盖会把本仓已改的东西盖掉 |
 
-产品功能若要回馈国内站和其他客户端，走 `looma-zervi` 自己的 PR。那是另一条线，不是本仓 clone 前置。
+海外功能直接改本仓 `backend/` / `frontend/`。只有**协议字段、枚举、入口**变了，才改 `contracts/gfcc` 并升版本——国内仓按新契约适配，不是国内仓先合、本仓再钉一份。反向亦然。
 
 ---
 
@@ -54,7 +58,7 @@ Vultr 海外机（`api.genz.ltd` / `tspace.genz.ltd`，以及后续 `circle.genz
 ├── frontend/                      # tspace：saas-build 打 dist，禁止手搓上传
 │   ├── packages/saas/
 │   └── packages/shared-core/
-├── backend/                       # 海外栈后端（本仓自带，不向本机系统借）
+├── backend/                       # 海外运行时（可分叉；协议真源在 contracts/gfcc）
 ├── data/poetry_full/              # 诗词库挂载点（空目录即可干跑）
 ├── data/chroma_models/
 ├── baseline/                      # 2026-09-18 晨间现网冻结（回滚对照，不是期望态）
@@ -62,6 +66,7 @@ Vultr 海外机（`api.genz.ltd` / `tspace.genz.ltd`，以及后续 `circle.genz
 ├── scripts/release-tag.sh         # 契约+干跑全绿才允许打 stack-v*
 ├── scripts/rollback-tag.sh        # 从 STACK_DIR/releases/<tag>/ 回滚
 ├── .env.example                   # 键清单；compose 校验用桩
+├── docs/looma-overseas/           # 境内 vs 海外区别归集（不是第三套运行时）
 └── docs/LIVE-FORENSICS-2026-09-18.md  # 当时真机调查笔记（归档，不是入门）
 ```
 

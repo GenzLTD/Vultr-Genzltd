@@ -1,29 +1,32 @@
-"""部署契约测试 — 守本仓自己的管线，不随 backend/ 快照刷新。
+"""部署契约测试 — 守本仓管线与 GFCC 协议钉。
 
-背景：backend/tests/test_overseas_billing_gate.py 随 looma-zervi 的 backend
-快照整体同步，其中两个契约测试断言的是 looma-zervi 的
-.github/workflows/deploy-overseas.yml——在本仓必然 FileNotFoundError。
-部署契约随部署管线走，本仓（海外部署唯一真源）的部署真源是：
+唯一协议真源是 contracts/gfcc（GenzLTD/gfcc）。backend/ 是海外运行时，
+可以按管辖分叉，不是 looma-zervi 的冻结钉。
+
+管线层另守：
 
   - .github/workflows/deploy.yml   双门禁扇入 8 步部署
   - scripts/bootstrap-env.sh        set_kv 非密钥每轮对齐 / seed_kv 密钥不覆盖
   - .env.example                   环境变量键清单与回调意图
   - frontend/.../Pricing.tsx       收银台回调 URL 的运行时真源
 
-本文件在快照区（backend/）之外：改本仓管线时同步改这里；
-从 looma-zervi 刷新 backend 钉不会覆盖本文件。
+本文件不放进 backend/：参考国内实现时整树拷贝，不能把本仓管线不变量盖掉。
 禁止把 workflow/bootstrap 断言加回 backend/tests/。
 
 可直接运行（dryrun.sh 第 3 步调用，无需 pytest），也可被 pytest 收集。
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEPLOY_YML = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
 BOOTSTRAP_ENV = REPO_ROOT / "scripts" / "bootstrap-env.sh"
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
+GFCC_SOURCE = REPO_ROOT / "contracts" / "gfcc" / "SOURCE.json"
+BACKEND_SOURCE = REPO_ROOT / "backend" / "SOURCE.json"
+BACKEND_CONTRACTS = REPO_ROOT / "backend" / "contracts"
 PRICING_TSX = (
     REPO_ROOT / "frontend" / "packages" / "saas" / "src" / "features" / "pricing" / "Pricing.tsx"
 )
@@ -102,6 +105,51 @@ class TestPricingReturnUrlSource:
                 assert "genz.ltd" not in line
                 assert "http://" not in line
                 assert "https://" not in line
+
+
+class TestGfccIsUniqueProtocolSource:
+    """协议只认 GFCC；backend 是运行时，可以变。"""
+
+    def test_gfcc_source_is_the_authority(self):
+        pin = json.loads(GFCC_SOURCE.read_text(encoding="utf-8"))
+        assert pin.get("authority") == "GenzLTD/gfcc"
+        assert pin.get("layer") == "L0-pin"
+        assert pin.get("unique_protocol_source") is True
+        assert len(pin.get("commit") or "") >= 40
+
+    def test_backend_source_defers_protocol_to_gfcc(self):
+        doc = json.loads(BACKEND_SOURCE.read_text(encoding="utf-8"))
+        assert BACKEND_SOURCE.is_file(), "backend/ 必须声明自己不是协议真源"
+        assert doc.get("role") == "overseas-runtime"
+        assert doc.get("not") == "protocol source"
+        assert doc.get("protocol") == "contracts/gfcc"
+        assert doc.get("protocol_authority") == "GenzLTD/gfcc"
+        assert doc.get("may_diverge") is True
+
+    def test_backend_product_contracts_do_not_name_looma_as_protocol_source(self):
+        files = sorted(BACKEND_CONTRACTS.glob("*.json"))
+        assert files, "backend/contracts 应有产品契约"
+        for path in files:
+            text = path.read_text(encoding="utf-8")
+            assert "真源：looma-zervi" not in text, (
+                f"{path.name} 仍把 looma-zervi 写成协议真源"
+            )
+            desc = json.loads(text).get("description") or ""
+            assert "looma-zervi/backend/contracts" not in desc, (
+                f"{path.name} description 仍指向 looma 产品契约路径"
+            )
+
+    def test_deploy_yml_asserts_gfcc_before_pytest(self):
+        lines = DEPLOY_YML.read_text(encoding="utf-8").splitlines()
+        ac = [i for i, line in enumerate(lines) if "assert-contracts.sh" in line]
+        py = [i for i, line in enumerate(lines) if "pytest" in line and "tests/" in line]
+        assert ac, "deploy.yml 必须跑 GFCC 契约门禁"
+        assert py, "deploy.yml 必须跑 backend pytest"
+        assert min(ac) < min(py), "GFCC 契约门禁必须先于 pytest"
+
+    def test_this_file_is_outside_backend(self):
+        rel = Path(__file__).resolve().relative_to(REPO_ROOT)
+        assert "backend" not in rel.parts, "管线契约不得放进 backend/"
 
 
 if __name__ == "__main__":

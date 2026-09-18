@@ -136,10 +136,11 @@
 | 2026-09-18 | **S6 = C2 镜像仓库化**（compose 只留 `image:`，栈目录自包含） | Owner 选择；网络前提已实证（§2.1 出口 401） |
 | 2026-09-18 | **端口临时访问只走 SSH 隧道**，不开公网窗口 | Owner 口径 |
 | 2026-09-18 | **仓内必须有 GFCC 契约层**；发版骨架 = 双门禁并行 → tspace artifact → 单点 8 步；**现在禁止打 tag 部署** | 现网服务仍在跑；tspace 源码已进 `frontend/packages/saas`；`DEPLOY_ENABLED` 关 |
+| 2026-09-19 | **GFCC 才是唯一协议真源**；本仓是海外运行时与海外部署真源；`backend/` 不是 looma 冻结钉，按管辖分叉 | 两套运行时靠契约对齐，不靠整树覆盖 |
 
 ## 七、归属与治理
 
-- 本仓是海外栈的自包含真源：`contracts/` `compose/` `nginx/` `docker/` `backend/`。clone 不依赖 `looma-zervi` 工作副本。
-- 变更纪律：改本仓文件 → `scripts/assert-contracts.sh` + `scripts/dryrun.sh` 全绿 → `stack-v*` tag → 授权后才动真机。`baseline/` 只作回滚对照，不是期望态。
+- **协议唯一真源**是 `contracts/gfcc/`（`GenzLTD/gfcc`）。本仓是海外运行时与海外部署真源；`looma-zervi` 是境内运行时。实现按备案与管辖分叉，契约变了才升版本。
+- 变更纪律：改本仓文件 → `scripts/assert-contracts.sh` + `scripts/dryrun.sh` 全绿 → `stack-v*` tag → 授权后才动真机。`baseline/` 只作回滚对照，不是期望态。契约可变，发版记录必须跟上。
 - 回滚纪律：只从 `/opt/vultr-genzltd-stack/releases/<tag>/` 取树；目录不存在则拒绝。
 - 资源↔主体↔服务的完整对账以 docs 仓《资源-主体-服务对账表》为准。

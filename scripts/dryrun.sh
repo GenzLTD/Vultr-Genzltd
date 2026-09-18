@@ -5,7 +5,7 @@
 #   只依赖本仓目录树，不组装 /opt/looma-zervi，不要求旁边有 looma-zervi。
 #     1) 本仓内补齐 data/ 与 backend/.env 桩
 #     2) GFCC 契约层（SOURCE 钉 + JSON + $ref）
-#     3) 部署契约测试（tests/deploy-contract/，守 deploy.yml 顺序与 Stripe tspace 意图）
+#     3) 部署契约测试（GFCC 唯一协议真源 + deploy.yml 顺序 + Stripe tspace 意图）
 #     4) docker compose config 语法校验
 #     5) 端口收内网断言：唯一允许发布的宿主端口是 127.0.0.1:5200
 #     6) nginx -t（容器内 nginx，读本仓 nginx/nginx.conf）
@@ -91,7 +91,7 @@ else
 fi
 
 # -------------------------------------------------------------
-hdr 3 "部署契约测试（deploy.yml / bootstrap-env.sh / Pricing.tsx）"
+hdr 3 "部署契约测试（GFCC 协议真源 / deploy.yml / bootstrap-env.sh / Pricing.tsx）"
 # 纯文本断言，无需 pytest/backend 依赖；独立于 backend/ 快照区。
 if runpy "$ROOT/tests/deploy-contract/test_deploy_contract.py"; then
   ok "部署契约测试通过"

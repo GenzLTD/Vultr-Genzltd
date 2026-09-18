@@ -1,0 +1,13 @@
+{
+  "role": "overseas-runtime",
+  "not": "protocol source",
+  "protocol": "contracts/gfcc",
+  "protocol_authority": "GenzLTD/gfcc",
+  "may_diverge": true,
+  "fork_origin": {
+    "tree": "looma-zervi/backend",
+    "git_commit": "fef232e",
+    "copied_at": "2026-09-18",
+    "note": "起步拷贝，不是以后每次发版的闸门。海外按管辖改本目录；从国内仓参考实现时，不得覆盖 contracts/gfcc 或 tests/deploy-contract。"
+  }
+}

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Looma Identity Contract v1",
   "version": "1.0.0",
-  "description": "个人持久身份契约：looma user_id 为真源；JWT 仅为会话；tier 见 payment.v1.json。真源：looma-zervi/backend/contracts/identity.v1.json",
+  "description": "个人持久身份契约：本运行时 user_id 为身份本体；JWT 仅为会话；tier 见 payment.v1.json。本文件是海外运行时产品契约；协议真源 contracts/gfcc（identity 端口）。",
 
   "principles": {
     "persistent_id": "users.id (UUID) — 终身不变，跨端互认",

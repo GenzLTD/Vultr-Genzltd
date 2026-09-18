@@ -137,6 +137,10 @@ def check_source_pin(root: Path, docs: dict[str, Any]) -> None:
     if not source_path.is_file():
         raise SystemExit("FAIL missing SOURCE.json")
     pin = json.loads(source_path.read_text(encoding="utf-8"))
+    if pin.get("authority") != "GenzLTD/gfcc":
+        raise SystemExit("FAIL SOURCE.json.authority must be GenzLTD/gfcc (unique protocol source)")
+    if pin.get("unique_protocol_source") is not True:
+        raise SystemExit("FAIL SOURCE.json.unique_protocol_source must be true")
     commit = pin.get("commit") or ""
     if len(commit) < 40:
         raise SystemExit("FAIL SOURCE.json.commit must be full SHA")

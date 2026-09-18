@@ -4,10 +4,10 @@
 
 | | |
 |---|---|
-| 钉 | [`SOURCE.json`](SOURCE.json)（从 looma-zervi `fef232e` 收进，2026-09-18） |
+| 起步拷贝 | [`SOURCE.json`](SOURCE.json)（从 looma-zervi `fef232e` 收进，2026-09-18） |
 | 构建 | `bash scripts/build-saas.sh` 或 `cd frontend && pnpm --filter @looma/saas build` |
 | 环境 | `VITE_API_BASE=""`（同源 `/v1`）、`VITE_DEPLOY_REGION=SG` |
 | 现网路径 | nginx `tspace.genz.ltd` → `/var/www/saas/dist` |
-| 不收 | PlanetX、genz-web（Vercel）、小程序 |
+| 本仓不收 | PlanetX 小程序壳、genz-web（Vercel 营销站） |
 
-产品功能仍先在 `looma-zervi` 合入，再覆盖本目录并改 `SOURCE.json`，然后打新 `stack-v*`。不要两仓各改一坨前端。
+海外 tspace 以本目录为真源，按管辖改（Stripe、海外会话、同源 `/v1`）。不必等 `looma-zervi` 先合再覆盖。国内站若要同一交互，按 GFCC / 产品需要自己适配。起步拷贝只记录分叉从哪来，不是以后每次发版的闸门。

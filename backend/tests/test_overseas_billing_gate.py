@@ -1,19 +1,12 @@
-"""Pin overseas billing gate + the *actual* Stripe return-URL contract.
+"""Overseas billing product tests (WeChat region gate + Stripe stub/checkout).
 
-The live overseas cashier is tspace.genz.ltd → Vultr.
+This directory is the overseas runtime. It may diverge from looma-zervi
+(Stripe vs WeChat, identity, Host). The unique protocol source is
+contracts/gfcc — not this file, not looma-zervi's workflows.
 
-Runtime (what users hit):
-  1. WeChat region gate: region != CN → 403 region_not_supported
-     (stub check still runs first; with PAYMENT_STUB_MODE=true the gate is
-     unreachable and returns 400 stub_mode instead).
-  2. Stripe success/cancel URLs are built in Pricing.tsx from
-     window.location.origin — Python does not read STRIPE_SUCCESS_URL.
-
-Config intent / deployment-pipeline contract tests live in
-  tests/deploy-contract/ (repo-owned, outside this backend snapshot).
-  They guard THIS repo's deploy.yml + bootstrap-env.sh. Do NOT add
-  workflow-file assertions here: backend/ is a pin refreshed from
-  looma-zervi and must stay product-only.
+Pipeline assertions live in tests/deploy-contract/ so a tree copy of
+backend/ cannot wipe THIS stack's deploy.yml invariants. Do not add
+deploy.yml / bootstrap-env / deploy-overseas.yml assertions here.
 """
 from __future__ import annotations
 

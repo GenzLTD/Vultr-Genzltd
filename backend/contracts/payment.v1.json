@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Looma Payment Contract v1",
   "version": "1.0.0",
-  "description": "Tier 全球统一；价格按 region 分叉。真源：looma-zervi/backend/contracts/payment.v1.json",
+  "description": "Tier 全球统一；价格按 region 分叉。本文件是海外运行时产品契约（本栈 Stripe）；协议真源 contracts/gfcc。",
   "tier_enum": ["free", "supporter", "pro", "enterprise"],
   "deprecated_tier_aliases": {
     "basic": "supporter"

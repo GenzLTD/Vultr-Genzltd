@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Looma Trust Protocol v1",
   "version": "1.0.0",
-  "description": "信任验证协议层契约：attestation 数据结构、Ed25519 签名格式、share_code 授权模型、验证 API 输入输出。真源：looma-zervi/backend/contracts/trust.v1.json",
+  "description": "信任验证产品契约：attestation 数据结构、Ed25519 签名格式、share_code 授权模型、验证 API 输入输出。本文件是海外运行时产品契约；协议真源 contracts/gfcc。",
 
   "signature": {
     "algorithm": "Ed25519",
