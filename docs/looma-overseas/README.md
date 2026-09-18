@@ -6,7 +6,7 @@
 |---|---|---|
 | **looma-overseas** | 境内运行时 ↔ 海外运行时：哪里分叉、哪里必须同号 | 不是再 clone 的 backend |
 | **Vultr-Genzltd** | 海外运行时 + 海外部署真源 | 不是 looma 的冻结钉 |
-| **looma-zervi** | 境内运行时（远端 **10** 个 `heads`、**68** 个 tag，2026-09-19 `ls-remote` 实测；tag 几乎全是 `overseas-v*`；`release/overseas` 仍在远端、已硬停） | 不是海外发版入口 |
+| **looma-zervi** | 境内运行时（远端 **21** 个 `heads`、**70** 个 tag——68 个 `overseas-v*`、`v1.4.0`、`archive/release-overseas-2026-09-15`；2026-09-19 `gh api` 权威核实） | 不是海外发版入口 |
 | **GenzLTD/gfcc** | 唯一协议真源 | 不是某一边的实现 |
 
 对齐只走 GFCC。海外改动不推进 `looma-zervi`。
@@ -105,4 +105,4 @@ CI 覆盖：`backend-test` 先 `assert-contracts.sh`（P1）再 `dryrun.sh --sta
 | 2026-09-19 | 治理 | 薄册成立；不建仓、不分树、不复活 `release/overseas` |
 | 2026-09-19 | 边界 | 境内内部差异不进本册；Mac 腾讯/天翼实勘只作取样 |
 | 2026-09-19 | 钉 | 同号规则 P1–P11；P2/P3/P10/P11 待补 |
-| 2026-09-19 | 核数 | heads/tag 修正为 10/68（`ls-remote` 实测；此前 21/70 与本机 33 均为过期 tracking 数） |
+| 2026-09-19 | 核数 | heads/tag 定为 **21/70**（`gh api` 权威）。此前 10/68 系 THOMAS 克隆 `origin` 实为 Gitee 镜像 `szbenyx/looma-zervi` 的滞后视图；本机 `branch -r` 33 为未 prune 残留。清账名单以 GitHub 真源 21 条为准 |
