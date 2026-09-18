@@ -1,0 +1,22 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    FLASK_PORT=5200
+
+# 内测机 apt 默认源极慢（CI 曾卡 1h+）；应用代码由 compose volume 挂载，镜像只装依赖
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' \
+    /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true
+
+COPY requirements.txt .
+# 镜像源可配置：海外机（Vultr SG）访问 aliyun 镜像会卡死，
+# 海外部署用 --build-arg PIP_INDEX_URL=https://pypi.org/simple 覆盖
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+RUN pip install --no-cache-dir -r requirements.txt -i ${PIP_INDEX_URL}
+
+EXPOSE 5200
+
+# 运行时 /app 由 bind mount 覆盖；此处仅声明启动命令
+CMD ["gunicorn", "--config", "gunicorn_config.py", "src.app:create_app()"]

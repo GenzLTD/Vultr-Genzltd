@@ -1,0 +1,54 @@
+# ============================================
+# Docker build context ignore
+# 减小镜像构建上下文，加速构建
+# ============================================
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+venv/
+.env
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Data (挂载 volume，不打包进镜像)
+data/
+chroma_data/
+*.db
+*.sqlite3
+
+# Tests
+tests/
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Frontend (不属于后端镜像)
+frontend/
+node_modules/
+
+# Docs
+docs/
+*.md
+!README.md
+
+# CI/CD
+.github/
+
+# OS
+.DS_Store
+Thumbs.db

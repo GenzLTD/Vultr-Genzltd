@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Looma Payment Contract v1",
+  "version": "1.0.0",
+  "description": "Tier 全球统一；价格按 region 分叉。真源：looma-zervi/backend/contracts/payment.v1.json",
+  "tier_enum": ["free", "supporter", "pro", "enterprise"],
+  "deprecated_tier_aliases": {
+    "basic": "supporter"
+  },
+  "regions": {
+    "CN": {
+      "currency": "CNY",
+      "payment_provider": "wechat",
+      "payment_providers": ["wechat", "huawei_iap"],
+      "default": true,
+      "label": "中国大陆"
+    },
+    "US": {
+      "currency": "USD",
+      "payment_provider": "stripe",
+      "payment_providers": ["stripe", "paypal", "airwallex"],
+      "default": false,
+      "label": "United States"
+    }
+  },
+  "huawei_iap": {
+    "description": "HarmonyOS 元服务 IAP；客户端验签上报后服务端 RSA 验签并发货",
+    "endpoints": [
+      {
+        "method": "POST",
+        "path": "/v1/payment/huawei/notify",
+        "auth": "required",
+        "body_camelCase": {
+          "purchaseData": "string JSON",
+          "purchaseSignature": "Base64",
+          "signatureAlgorithm": "SHA256WithRSA (optional)",
+          "expectedProductId": "optional",
+          "expectedAmount": "optional"
+        },
+        "status": "implemented"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/payment/huawei/verify",
+        "auth": "required",
+        "body_camelCase": {
+          "purchaseToken": "string",
+          "productId": "string"
+        },
+        "status": "stub_501"
+      }
+    ],
+    "env": [
+      "HUAWEI_IAP_PUBLIC_KEY",
+      "HUAWEI_IAP_SIGN_ALGORITHM",
+      "HUAWEI_IAP_TIER_MAP"
+    ]
+  },
+  "plans": [
+    {
+      "tier": "free",
+      "name": {
+        "CN": "免费版",
+        "US": "Free"
+      },
+      "prices": {
+        "CN": {
+          "plan_id": "free_monthly_cn",
+          "amount": 0,
+          "currency": "CNY"
+        },
+        "US": {
+          "plan_id": "free_monthly_us",
+          "amount": 0,
+          "currency": "USD"
+        }
+      },
+      "features": {
+        "CN": [
+          "每日 30 次 AI 对话",
+          "基础岗位匹配",
+          "简历解析（3次/天）"
+        ],
+        "US": [
+          "30 AI chats per day",
+          "Basic job matching",
+          "3 resume parses per day"
+        ]
+      },
+      "upgradable": false
+    },
+    {
+      "tier": "supporter",
+      "name": {
+        "CN": "支持者版",
+        "US": "Supporter"
+      },
+      "prices": {
+        "CN": {
+          "plan_id": "supporter_monthly_cn",
+          "amount": 9.9,
+          "currency": "CNY"
+        },
+        "US": {
+          "plan_id": "supporter_monthly_us",
+          "amount": 1.99,
+          "currency": "USD"
+        }
+      },
+      "features": {
+        "CN": [
+          "每日 100 次 AI 对话",
+          "高级岗位匹配",
+          "简历解析（不限）",
+          "专属星球徽章"
+        ],
+        "US": [
+          "100 AI chats per day",
+          "Advanced job matching",
+          "Unlimited resume parsing",
+          "PlanetX supporter badge"
+        ]
+      },
+      "upgradable": true
+    },
+    {
+      "tier": "pro",
+      "name": {
+        "CN": "专业版",
+        "US": "Pro"
+      },
+      "prices": {
+        "CN": {
+          "plan_id": "pro_monthly_cn",
+          "amount": 29.9,
+          "currency": "CNY"
+        },
+        "US": {
+          "plan_id": "pro_monthly_us",
+          "amount": 5.99,
+          "currency": "USD"
+        }
+      },
+      "features": {
+        "CN": [
+          "AI 对话不限",
+          "全功能岗位匹配",
+          "简历解析（不限）",
+          "企业级报告",
+          "优先客服"
+        ],
+        "US": [
+          "Unlimited AI chats",
+          "Full job matching",
+          "Unlimited resume parsing",
+          "Advanced analytics",
+          "Priority support"
+        ]
+      },
+      "upgradable": true
+    }
+  ],
+  "enterprise": {
+    "tier": "enterprise",
+    "name": {
+      "CN": "企业版",
+      "US": "Enterprise"
+    },
+    "contact_sales": true,
+    "upgradable": false
+  }
+}

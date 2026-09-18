@@ -55,9 +55,9 @@ on:
         default: false
   push:
     branches: [main]
-    paths: ['compose/**', 'nginx/**', 'scripts/**', '.github/workflows/deploy.yml']
+    paths: ['compose/**', 'nginx/**', 'scripts/**', 'backend/**', 'docker/**', '.github/workflows/deploy.yml']
   pull_request:
-    paths: ['compose/**', 'nginx/**', 'scripts/**', '.github/workflows/deploy.yml']
+    paths: ['compose/**', 'nginx/**', 'scripts/**', 'backend/**', 'docker/**', '.github/workflows/deploy.yml']
 
 permissions:
   contents: read
@@ -142,6 +142,10 @@ jobs:
           scp $OPT scripts/*.sh "$TARGET:$STACK_DIR/scripts/"
 
       - name: .env 仅首次种入（已存在则跳过，永不覆盖）
+        # 兜底层：scripts/seed-env.sh 永不覆盖；防发版回滚线上密钥。
+        # 上游 looma-zervi 仓 deploy-overseas.yml 若仍 set_kv 全键覆盖，
+        # 本 seed-only 仍能把"被覆盖的密钥"挡在 .env 外。
+        # 根治见 proposals/looma-zervi-set_kv-seed-only.md（上游 PR 提案，未提交）。
         env:
           HOST: ${{ vars.DEPLOY_HOST }}
           USER: ${{ vars.DEPLOY_USER || 'root' }}

@@ -46,8 +46,19 @@ hdr 1 "组装布局镜像"
 rm -rf "$LAYOUT"
 mkdir -p "$LAYOUT/docker" "$LAYOUT/backend" "$LAYOUT/data/poetry_full" "$LAYOUT/data/chroma_models"
 cp "$ROOT/compose/docker-compose.yml" "$LAYOUT/docker/docker-compose.yml"
+# 倒出 backend/（排除 .env 真值、缓存、数据卷内容、CI 占位）
+rsync -a --exclude='.env' --exclude='__pycache__' --exclude='*.pyc' \
+  --exclude='chroma_data' --exclude='chroma_data/**' \
+  --exclude='poetry_data' --exclude='poetry_data/**' \
+  --exclude='data/*.db' --exclude='data/*.sqlite*' \
+  --exclude='git_commit.txt' \
+  "$ROOT/backend/" "$LAYOUT/backend/"
+# 倒出 docker/（仅本仓用到的两个；compose 用相对路径 ../docker/Dockerfile.backend）
+cp "$ROOT/docker/Dockerfile.backend" "$LAYOUT/docker/Dockerfile.backend"
+cp "$ROOT/docker/.dockerignore"     "$LAYOUT/docker/.dockerignore"
+# 干跑要 env_file 存在（compose config 需要）；用 deploy 侧 .env.example 作 stub
+# ——绝不含真值，仅满足 compose 解析；与 backend/.env.example（产品侧）并存不冲突
 cp "$ROOT/.env.example" "$LAYOUT/backend/.env"
-: > "$LAYOUT/docker/Dockerfile.backend"        # 干跑不构建镜像，仅占位满足路径解析
 ok "布局就绪: ${LAYOUT#$ROOT/}"
 
 # -------------------------------------------------------------

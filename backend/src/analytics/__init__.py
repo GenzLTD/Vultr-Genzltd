@@ -1,0 +1,1 @@
+# analytics package — server-side event logging for closed-loop funnel

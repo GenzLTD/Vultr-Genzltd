@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Looma Trust Protocol v1",
+  "version": "1.0.0",
+  "description": "信任验证协议层契约：attestation 数据结构、Ed25519 签名格式、share_code 授权模型、验证 API 输入输出。真源：looma-zervi/backend/contracts/trust.v1.json",
+
+  "signature": {
+    "algorithm": "Ed25519",
+    "key_type": "ed25519_private_key.pem",
+    "format": "looma_sig_v1:{base64url_encoded_signature}",
+    "signing_input": "sha256(canonical_json(attestation_body_without_signature_field))",
+    "verification": "任何持有 looma 公钥的第三方可独立验证签名，不依赖中心服务器",
+    "public_key_endpoint": "GET /v1/trust/.well-known/public-key"
+  },
+
+  "attestation": {
+    "description": "Trust Agent 生成的可验证声明卡，每条对应一个 claim_type",
+    "schema": {
+      "type": "object",
+      "required": [
+        "attestation_id",
+        "candidate_id",
+        "claim_type",
+        "claim_statement",
+        "evidence_type",
+        "verification_status",
+        "evidence_refs",
+        "confidence_score",
+        "issued_at",
+        "signature"
+      ],
+      "properties": {
+        "attestation_id": {
+          "type": "string",
+          "description": "唯一标识，格式 att_{uuid_short}",
+          "example": "att_a1b2c3d4"
+        },
+        "candidate_id": {
+          "type": "string",
+          "description": "候选人 looma user_id",
+          "example": "uid_7f3a2b1c"
+        },
+        "claim_type": {
+          "type": "string",
+          "enum": ["identity", "collaboration", "communication", "influence"],
+          "description": "声明类别"
+        },
+        "claim_statement": {
+          "type": "string",
+          "description": "人类可读的声明陈述",
+          "example": "能与不同风格的人完成协作任务"
+        },
+        "evidence_type": {
+          "type": "string",
+          "enum": ["quiz", "fleet_consensus", "dialogue_analysis", "share_signal", "credential"],
+          "description": "证据来源类型。credential 代表学信网/人社部等权威第三方背书"
+        },
+        "verification_status": {
+          "type": "string",
+          "enum": ["verified", "verified_by_authority", "weak", "unverified"],
+          "description": "验证状态：verified_by_authority 仅限 evidence_type=credential 时使用，置信度高于 verified"
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "引用的 trust_memories.id 列表，用于溯源",
+          "example": ["mem_abc123", "mem_def456"]
+        },
+        "confidence_score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Trust Agent 计算的置信度"
+        },
+        "issued_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "签发时间 ISO 8601"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "过期时间（可选），默认签发后 90 天"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^looma_sig_v1:[A-Za-z0-9_-]+$",
+          "description": "Ed25519 签名，覆盖除 signature 字段外的所有字段"
+        }
+      }
+    }
+  },
+
+  "share_code": {
+    "description": "候选人生成的临时授权码，第三方可凭借此码查询候选人授权范围内的声明",
+    "create_endpoint": {
+      "method": "POST",
+      "path": "/v1/trust/share-code",
+      "auth": "JWT Bearer (候选人本人)",
+      "request": {
+        "scope": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["identity", "collaboration", "communication", "influence"] },
+          "description": "授权可见的 claim_type 列表，默认全部"
+        },
+        "expires_in_seconds": {
+          "type": "integer",
+          "default": 604800,
+          "description": "有效期秒数，默认 7 天 (604800)，最大 30 天 (2592000)"
+        },
+        "max_access_count": {
+          "type": "integer",
+          "default": 10,
+          "description": "最大可被查询次数，默认 10 次"
+        }
+      },
+      "response": {
+        "share_code": "sc_a1b2c3d4e5f6",
+        "expires_at": "2026-07-27T08:00:00Z",
+        "scope": ["identity", "collaboration"],
+        "remaining_access_count": 10
+      }
+    },
+    "verify_endpoint": {
+      "method": "POST",
+      "path": "/v1/trust/verify",
+      "auth": "无需 JWT（share_code 即授权）",
+      "request": {
+        "share_code": "sc_a1b2c3d4e5f6"
+      },
+      "response": {
+        "attestations": ["<attestation 对象数组，仅包含 scope 内的声明>"],
+        "candidate_alias": "匿名候选人或真实姓名（取决于候选人的隐私设置）",
+        "verified_at": "2026-07-20T08:00:00Z"
+      },
+      "errors": {
+        "share_code_expired": "授权码已过期",
+        "share_code_exhausted": "授权码查询次数已用完",
+        "share_code_not_found": "授权码不存在或已撤销"
+      }
+    },
+    "audit_log": {
+      "description": "每次 verify 调用落一条审计日志，候选人可在信任档案页查看",
+      "fields": ["verifier_info", "accessed_at", "attestations_viewed", "share_code_used"]
+    }
+  },
+
+  "api_endpoints": {
+    "candidate_facing": [
+      {
+        "method": "GET",
+        "path": "/v1/trust/attestations",
+        "auth": "JWT",
+        "description": "获取当前用户的所有声明卡（含签名）"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/trust/refresh",
+        "auth": "JWT",
+        "description": "手动触发 Trust Agent 重新评估"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/trust/share-code",
+        "auth": "JWT",
+        "description": "生成临时授权码供第三方查询"
+      },
+      {
+        "method": "DELETE",
+        "path": "/v1/trust/share-code/{code}",
+        "auth": "JWT",
+        "description": "撤销授权码"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/trust/audit-log",
+        "auth": "JWT",
+        "description": "查看谁查询过我的信任声明"
+      }
+    ],
+    "public": [
+      {
+        "method": "GET",
+        "path": "/v1/trust/.well-known/public-key",
+        "auth": "无",
+        "description": "获取 looma Ed25519 公钥，用于离线验证签名"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/trust/verify",
+        "auth": "share_code (无需 JWT)",
+        "description": "第三方用 share_code 查询候选人授权范围内的声明"
+      }
+    ]
+  },
+
+  "error_format": {
+    "content_type": "application/problem+json",
+    "schema": {
+      "type": "object",
+      "required": ["error", "message"],
+      "properties": {
+        "error": { "type": "string", "description": "机器可读错误码" },
+        "message": { "type": "string", "description": "人类可读错误描述" }
+      }
+    },
+    "error_codes": {
+      "share_code_expired": "授权码已过期",
+      "share_code_exhausted": "查询次数已用完",
+      "share_code_not_found": "授权码不存在",
+      "signature_verification_failed": "签名验证失败",
+      "consent_required": "需要用户授权"
+    }
+  }
+}
