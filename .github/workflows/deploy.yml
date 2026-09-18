@@ -167,14 +167,52 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
             "$USER@$HOST" "docker compose --env-file $DEPLOY_PATH/backend/.env -f $DEPLOY_PATH/docker/docker-compose.yml -p looma-zervi up -d --no-build --remove-orphans backend redis chromadb"
 
+      - name: 端口收敛断言（服务端权威：P0 即部署终态）
+        env:
+          HOST: ${{ vars.DEPLOY_HOST }}
+          USER: ${{ vars.DEPLOY_USER || 'root' }}
+        run: |
+          # 口径（Owner 2026-09-18）：端口「公开/收内网」由部署流程掌控，
+          # 每次部署的终态都必须是「收内网」。权威判据取自 docker，不依赖 runner 网络。
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            "$USER@$HOST" "bash -s" <<'REMOTE'
+          set -u
+          echo "--- 端口矩阵 ---"
+          docker ps --format '{{.Names}}  {{.Ports}}' | grep -E 'looma-(backend|redis|chromadb)' || true
+          ok=1
+          b="$(docker port looma-backend 5200/tcp 2>/dev/null | head -1)"
+          if [ "$b" = "127.0.0.1:5200" ]; then echo "backend   OK   ${b}"; else echo "REFUSE backend 期望 127.0.0.1:5200，实为 [${b}]"; ok=0; fi
+          for pair in looma-redis:6379 looma-chromadb:8000; do
+            c="${pair%%:*}"; p="${pair##*:}"
+            out="$(docker port "$c" "$p/tcp" 2>/dev/null | head -1)"
+            if [ -z "$out" ]; then echo "${c}   OK   无宿主端口"; else echo "REFUSE ${c} 仍在发布 [${out}]"; ok=0; fi
+          done
+          [ "$ok" = "1" ] || { echo "端口未收敛，拒绝判定部署成功"; exit 1; }
+          REMOTE
+
+      - name: 公网不可达断言（独立于服务端自证）
+        env:
+          HOST: ${{ vars.DEPLOY_HOST }}
+        run: |
+          # 从公网独立复核：三个端口都必须打不通（closed / filtered 皆算通过）。
+          fail=0
+          for p in 5200 6379 8000; do
+            if timeout 6 bash -c "echo > /dev/tcp/$HOST/$p" 2>/dev/null; then
+              echo "REFUSE: 公网仍可连 $HOST:$p"
+              fail=1
+            else
+              echo "OK: 公网不可达 $HOST:$p"
+            fi
+          done
+          [ "$fail" = "0" ] || exit 1
+
       - name: 应用 nginx（仅勾选 apply_nginx 时；test 后 reload，绝不停服）
         if: ${{ inputs.apply_nginx == true }}
         env:
           HOST: ${{ vars.DEPLOY_HOST }}
           USER: ${{ vars.DEPLOY_USER || 'root' }}
         run: |
-          # 注：/opt/looma-zervi/docker/nginx.conf 归 looma-zervi 流水线管；
-          # P0 不改 nginx。覆盖前先比基线指纹，避免丢掉手工改动或证书路径调整。
+          # P0 不改 nginx。覆盖前先备份 /etc 现网文件，避免丢掉手工改动或证书路径调整。
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
             "$USER@$HOST" "cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak-\$(date +%Y%m%d-%H%M%S) \
              && cp $DEPLOY_PATH/docker/nginx.conf /etc/nginx/nginx.conf.new \
@@ -189,3 +227,26 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
             "$USER@$HOST" "bash $STACK_DIR/scripts/healthcheck.sh"
+
+      - name: 失败即回滚（仅服务不健康时；端口断言失败刻意不回滚）
+        if: failure()
+        env:
+          HOST: ${{ vars.DEPLOY_HOST }}
+          USER: ${{ vars.DEPLOY_USER || 'root' }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            "$USER@$HOST" "STACK_DIR=$STACK_DIR DEPLOY_PATH=$DEPLOY_PATH bash -s" <<'REMOTE'
+          set -u
+          if curl -sf -m 5 http://127.0.0.1:5200/health >/dev/null 2>&1; then
+            echo "服务在跑 -> 判定为前置/端口断言失败，不回滚"
+            echo "（回滚只会把 5200/6379/8000 重新暴露到公网，风险更高）"
+            exit 1
+          fi
+          LAST="$(ls -1 "${STACK_DIR}"/backups/docker-compose.yml.* 2>/dev/null | tail -1)"
+          if [ -z "${LAST}" ]; then echo "无备份可回滚"; exit 1; fi
+          cp "${LAST}" "${DEPLOY_PATH}/docker/docker-compose.yml"
+          docker compose --env-file "${DEPLOY_PATH}/backend/.env" \
+            -f "${DEPLOY_PATH}/docker/docker-compose.yml" -p looma-zervi \
+            up -d --no-build --remove-orphans backend redis chromadb
+          echo "已回滚到 ${LAST}（注意：端口恢复公网可达，属止血态，须立刻处理）"
+          REMOTE
