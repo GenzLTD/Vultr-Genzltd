@@ -87,7 +87,8 @@ bash scripts/plan.sh
 |---|---|
 | `push` / `pull_request`（compose / nginx / scripts / 本工作流变更时） | **只跑干跑**，无 SSH、不可能碰真机 |
 | 手动 `workflow_dispatch`，`dry_run=true`（默认） | 只跑干跑 |
-| 手动 `workflow_dispatch`，`dry_run=false` | 干跑通过 → 投递 → 重建容器 → 健康门禁（受 `production` 环境审批保护） |
+| 手动 `workflow_dispatch`，`dry_run=false` **且** `DEPLOY_ENABLED=true` | 干跑通过 → 投递 → 重建容器 → 健康门禁（受 `production` 环境审批保护） |
+| ↑ 但 `DEPLOY_ENABLED` 未设/非 `true` | **部署 job 永不执行**（当前默认状态，见 §七） |
 | `apply_nginx=true`（默认 false） | 额外应用 nginx：`nginx -t` 通过才 `reload`，**绝不停服** |
 
 CI 里的干跑用 `--static`（跳过第 6 步"回环绑定运行时实证"，那步需要真实网卡、在开发机本地跑）。
@@ -112,13 +113,71 @@ gh variable set DEPLOY_USER -R GenzLTD/Vultr-Genzltd --body "root"   # 可选，
 | `SSH_PRIVATE_KEY` | secret | ✅ | 登录目标机的私钥（对应 `~/.ssh/vultr_overseas`） |
 | `DEPLOY_HOST` | var | ✅ | 目标机 IP / 域名 |
 | `DEPLOY_USER` | var | ⬜ | 登录用户，缺省 `root` |
+| `DEPLOY_ENABLED` | var | ⛔ | 安全硬开关。**在 §七 的双写冲突解决前不要设置**；只有等于 `'true'` 时部署 job 才可能出现 |
 
 **环境**：Settings → Environments 建 `production`，建议配 **Required reviewers**——
 这样 `dry_run=false` 也必须人工批一次才能落到真机。
 
-**不需要配**：`DEPLOY_PATH` 固定为 `/opt/looma-zervi`（写在 workflow 的 `env` 里，非敏感）；
-`.env` 的真值不需要进 Secrets——目标机 `.env` 已存在，`seed-env.sh` 会直接跳过，永不覆盖。
+**不需要配**：`DEPLOY_PATH`（`/opt/looma-zervi`）与 `STACK_DIR`（`/opt/vultr-genzltd-stack`）
+写在 workflow 的 `env` 里，非敏感；`.env` 的真值不需要进 Secrets——目标机 `.env` 已存在，
+`seed-env.sh` 会直接跳过，永不覆盖。
 
 ### 首次启用建议
 
-先只跑 `dry_run=true` 一次，确认干跑五步全绿；再建环境 + 配审批；最后才用 `dry_run=false`。
+先只跑 `dry_run=true` 一次，确认干跑五步全绿。**部署那一步先别开**——原因见 §七。
+
+## 七、与 looma-zervi 流水线的撞车事实（2026-09-18 只读核实）
+
+> 结论先说：**P0 若只落在本仓，会被静默回滚；而部署本身不会崩。**
+
+### 已证「不会崩」
+
+| 链路 | 实测证据 | 结论 |
+|---|---|---|
+| nginx → backend | 宿主 nginx：`upstream looma_backend { server 127.0.0.1:5200; }` | 收成 `127.0.0.1:5200:5200` **不影响回源** |
+| backend → redis/chromadb | 三容器同在 `looma-zervi_looma-net` | 撤掉宿主端口发布后仍走服务名可达，**不断服** |
+| compose 项目归属 | 文件首行 `name: looma-zervi`；容器 `wd=/opt/looma-zervi/docker` | 从任何目录 `up -d` 都是同一 project，**不会另起空库容器** |
+| `.env` | 目标机 `backend/.env` 在位（1353B，root） | `seed-env.sh` 跳过，**不覆盖** |
+| nginx 配置 | `/etc/nginx/nginx.conf` md5 `0f505e33…` = 基线；`conf.d/`、`sites-enabled/` 皆空 | 与基线逐字节一致；**非 certbot 管辖**（用 `/etc/nginx/ssl/` 手工证书） |
+
+### 会撞车
+
+**C1 变量漂移（会波及真实支付）**
+looma-zervi 的流水线以
+`docker compose --env-file backend/.env -f docker/docker-compose.yml -p looma-zervi` 调用。
+而 `/opt/looma-zervi/docker/.env` **不存在** → 若缺 `--env-file`，插值源只剩 shell →
+`${DEPLOY_REGION:-US}` 兜成 **US**，覆盖 `backend/.env` 里的 **SG**。
+现役容器实测 `DEPLOY_REGION=SG`，且 `PAYMENT_STUB_MODE=false`（**真实支付在跑**）。
+→ 本仓已对齐该调用方式，并加了插值断言（插值不是 SG 就拒绝重建）。
+
+**C2 P0 被静默回滚（安全修复失效）**
+`/opt/looma-zervi` 现由 looma-zervi 的 `deploy-overseas.yml` 以
+`rsync -avz --delete` 全树同步（源仓 HEAD `a52638e5` = 线上 `health.git_commit`）。
+而**源仓里的 `docker/docker-compose.yml` 仍是 `"5200:5200"`/`"8000:8000"`/`"6379:6379"`（未做 P0）**
+→ 下次 `overseas-*` tag 发布即把 P0 覆盖回 `0.0.0.0`，**公网重新暴露且无人察觉**。
+（该流水线触发条件：`push: tags: overseas-*` 或手动，非定时。）
+
+**C3 污染对方部署树**
+`/opt/looma-zervi/scripts/` 属 looma-zervi 仓；往那里 scp 本仓脚本会被 `rsync --delete` 清掉，
+导致健康门禁脚本丢失。→ 本仓已改用独立目录 `STACK_DIR=/opt/vultr-genzltd-stack`。
+
+### 两条出路（待 Owner 拍板）
+
+**路径 A（推荐）**：本仓只做「干跑门禁 + 变更集枢纽」，**删掉 deploy job**；
+P0 三处端口改动作为 PR 提到 `looma-zervi`，走它现成且完整的 `deploy-overseas.yml`
+（该流水线本就 `up -d --remove-orphans --force-recreate --no-build` + 本地/公网双重健康检查）。
+一条通道，零撞车。
+
+**路径 B**：让本仓当唯一部署入口 → 必须先停用/剥离 looma-zervi 的部署段，
+并把 P0 回灌 looma-zervi 仓（否则被 rsync 覆盖）；本仓已修的 C1/C3 保留。
+
+### 顺带实证：`CATALOG.md` §四 待决 D1（Cloudflare 回源模式）
+
+nginx 与部署脚本是按 **Cloudflare Full + 自签 origin 证书**准备的
+（`/etc/nginx/ssl/fullchain.pem`；`deploy-overseas.yml` 注释明写 "Origin TLS for Cloudflare Full mode"）。
+但**公网实测 443 为 filtered，`ufw` 仅放行 22/80**，而站点仍 200
+→ 实际回源走的是 **80（Flexible）**。
+**含义：切 Full 之前必须先 `ufw allow 443`，否则一切就全站 502。**
+
+另注：`5200/6379/8000` 公网 OPEN 是 `docker-proxy` 绕过 `ufw` 的结果——
+收内网只能靠 compose 端口绑定，指望 ufw 无效（这正是 P0 的意义）。
