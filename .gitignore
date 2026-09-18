@@ -1,6 +1,16 @@
 # 干跑产物（每次运行由 scripts/dryrun.sh 重新生成）
 dryrun/layout/
 
+# 从 Vultr /var/www/saas/dist 拉下来的 tspace 产物（不入库）
+local/www/tspace/
+# 本机 ServBay 用的 genz-web 构建产物
+local/www/genz-web/
+# 本机 nginx 运行时
+local/logs/
+local/temp/
+local/nginx.pid
+local/tmp-*.json
+
 # 环境变量真值
 .env
 *.env

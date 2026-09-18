@@ -20,6 +20,7 @@ Vultr 海外机（`api.genz.ltd` / `tspace.genz.ltd`）的**自包含部署仓**
 | 镜像构建 | `docker/Dockerfile.backend` |
 | 环境变量键清单 | `.env.example`（真值永不入库） |
 | 本地校验 | `scripts/dryrun.sh` |
+| 可选：Windows ServBay 旁路演示 | `local/`（只绑 18080/18081/18082） |
 
 **不要跟：**
 
@@ -28,8 +29,8 @@ Vultr 海外机（`api.genz.ltd` / `tspace.genz.ltd`）的**自包含部署仓**
 | `looma-zervi` 的 `docker/nginx.conf` / `nginx-vultr.conf` | 产品单仓里的历史件。`nginx-vultr.conf` 不被任何管线引用。海外机反代以**本仓** `nginx/nginx.conf` 为准 |
 | 旁边再 clone 一份 `looma-zervi` 来补 `../backend` | 相对路径已经指向**本仓** `backend/`、`docker/`、`data/`。clone 本仓即可解析 |
 | 笔记本上的 `/opt/looma-zervi` | 那是 **Vultr 生产机** 上的历史目录，不是本地布局。干跑不再组装这份假树 |
-| `GenzLTD/genz-web` / Vercel 裸域 | 营销站不在本机 serve。本仓 nginx **不得**再出现 `server_name genz.ltd` / `www.genz.ltd` |
-| 本机 ServBay 的 80/443 | 与本仓无关 |
+| `GenzLTD/genz-web` / Vercel 裸域 | 营销站生产仍在 Vercel。**生产** `nginx/nginx.conf` **不得**再出现 `server_name genz.ltd` / `www.genz.ltd`。本机若要用 `local/` 仿真官网，只允许绑 18080，不得占用 80/443 |
+| 本机 ServBay 的 80/443 | 与本仓生产期望态无关。旁路演示见 `local/` |
 
 产品功能若要回馈国内站和其他客户端，走 `looma-zervi` 自己的 PR。那是另一条线，不是本仓 clone 前置。
 
@@ -104,6 +105,27 @@ docker compose -f compose/docker-compose.yml build \
 ```
 
 `backend/.env` 桩不能拿去连生产 Stripe。真值只存在于 Vultr 机上的 `.env`，由 `scripts/seed-env.sh` **仅首次种入、永不覆盖**。
+
+---
+
+## 可选：Windows ServBay 三端口演示
+
+这不是 clone 前置，也不是真机 nginx。它用 ServBay 的 `nginx.exe` 另开前缀，**不改 80/443**，在本机仿真三站：
+
+| 端口 | 仿真 | 路径 |
+|---|---|---|
+| 18080 | `genz.ltd` 官网 | `local/www/genz-web/`（自己 `pnpm --filter @looma/genz-web build` 拷进来） |
+| 18081 | `api.genz.ltd` | 反代 `127.0.0.1:5200` |
+| 18082 | `tspace.genz.ltd` | `local/www/tspace/`（构建产物或从真机 dist 拷贝） |
+
+```powershell
+# 仓库根目录
+.\local\start.ps1
+# 停
+.\local\stop.ps1
+```
+
+`local/www/tspace/`、`local/www/genz-web/`、`backend/.env` 真值都不入库。生产期望态仍以 `nginx/nginx.conf` + `compose/docker-compose.yml` 为准。
 
 ---
 

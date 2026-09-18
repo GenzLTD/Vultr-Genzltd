@@ -1,0 +1,18 @@
+# 仅本机 ServBay 演示：少 worker + 国内镜像构建。不用于真机。
+services:
+  backend:
+    build:
+      context: ../backend
+      dockerfile: ../docker/Dockerfile.backend
+      args:
+        USE_CN_MIRROR: "1"
+        PIP_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple/"
+    command:
+      - gunicorn
+      - --bind
+      - 0.0.0.0:5200
+      - --workers
+      - "2"
+      - --timeout
+      - "120"
+      - src.app:create_app()
