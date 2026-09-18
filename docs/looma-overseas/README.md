@@ -37,12 +37,12 @@
 | P2 | 禁止把 GFCC 字段改成「海外专用名字」 | **要**（改名 = 拆协议） | 无独立「禁止改名」断言；目前只钉版本一致与 `$ref` 可解析 | **无钉，待补** |
 | P3 | 契约入口在册的 HTTP（如 `POST /v1/ask`） | **要** | SOURCE.json `kernel.entry`；无路由实测钉 | **无钉，待补** |
 | P4 | 微信收款海外不可用 | 分叉（海外 403 / stub） | 本仓 `backend/tests/test_overseas_billing_gate.py` · `TestWechatRegionGate` | 有钉（产品行为） |
-| P5 | Stripe 回调意图 = tspace，密钥只 `seed_kv`、禁止 `set_kv` | 分叉（海外 Stripe；境内微信）。**密钥纪律两边同号** | 本仓 `TestStripeHostIntent`（×3）；境内 `looma-zervi` #19 + `TestOverseasWorkflowContract`（守 `deploy-overseas.yml`） | 有钉（各守各的 yml） |
+| P5 | Stripe 回调意图 = tspace，密钥只 `seed_kv`、禁止 `set_kv` | 分叉（海外 Stripe；境内微信）。**密钥纪律两边同号** | 本仓 `TestStripeHostIntent`（×3）。境内旧钉（守 `deploy-overseas.yml`）随通道退役（2026-09-19，`9751945` 改守缺席） | 有钉（海外）；境内意图钉随旧通道退役 |
 | P6 | 收银台回调用 `window.location.origin` | 海外运行时要 | 本仓 `TestPricingReturnUrlSource` | 有钉 |
-| P7 | `git_commit.txt` 写在任何 `compose up` 之前 | **要**（形态同号，文件不同） | 本仓 `TestDeployOrder`（`deploy.yml`）；境内 `test_overseas_billing_gate.py::TestOverseasWorkflowContract::test_git_commit_marker_is_written_before_compose_up` | 有钉 |
+| P7 | `git_commit.txt` 写在任何 `compose up` 之前 | **要**（形态同号，文件不同） | 本仓 `TestDeployOrder`（`deploy.yml`）。境内旧钉（`test_git_commit_marker_is_written_before_compose_up`）随 `deploy-overseas.yml` 退役 | 有钉（海外）；**境内无钉，待 looma-cn 立钉** |
 | P8 | 宿主只发布 `127.0.0.1:5200`；chroma/redis 不发布 | **要**（海外仓已钉；境内两机尚未对齐） | 本仓 `scripts/dryrun.sh` 第 5 步 | 有钉（**仓内期望态**；海外现网未应用，见下表） |
 | P9 | compose 入 git、真值不入库；非密钥 `set_kv`、密钥 `seed_kv` | **要** | 本仓 `bootstrap-env.sh` + P5；dryrun 用 `.env.example` 桩 | 有钉（海外仓）。境内两机取样见下表，**收敛方案不在本册** |
-| P10 | 发版管线不合成一条 | 分叉 | 无「禁止引用 deploy-overseas.yml」的 CI 钉；纪律靠本册 + 不向 looma 开海外 PR | **无钉，待补** |
+| P10 | 发版管线不合成一条 | 分叉 | 境内 `TestOverseasWorkflowContract::test_deploy_overseas_workflow_is_retired` 守缺席（`9751945`）：`deploy-overseas.yml` 复活即红；海外侧纪律靠本册 + 不向 looma 开海外 PR | 有钉（境内守缺席，2026-09-19 补） |
 | P11 | JWT `iss` / 品牌包名 | 分叉（白标待做） | 无钉 | **无钉，待补** |
 
 CI 覆盖：`backend-test` 先 `assert-contracts.sh`（P1）再 `dryrun.sh --static`（P5–P9），再 `backend/tests`（P4）。
@@ -58,7 +58,7 @@ CI 覆盖：`backend-test` 先 `assert-contracts.sh`（P1）再 `dryrun.sh --sta
 | 支付 | 微信，CNY | Stripe，USD | P5 P6 |
 | 身份会话 | `iss=looma`，`looma_token` | 邮箱 + Google；海外不读 PlanetX `looma_token` | P11 |
 | Host | 备案域；circle 现挂天翼是**现网事实**，不是本册要境内拷贝的法 | 营销站 Vercel；api / tspace → Vultr；circle 片段在仓、未进现行 nginx | 分叉。不拷现网 |
-| 发版 | `deploy-overseas.yml`，`overseas-*` | `deploy.yml` 双门禁 → `stack-v*`；`DEPLOY_ENABLED` 仍关 | P7 P10 |
+| 发版 | ~~`deploy-overseas.yml`~~ **已退役**（2026-09-19 `785c2a7` 删文件、`release/overseas` 分支删除，归档 `archive/release-overseas-2026-09-15`；`rotate-overseas-stripe.yml` 仍为手动触发、待海外侧处置） | `deploy.yml` 双门禁 → `stack-v*`；`DEPLOY_ENABLED` 仍关 | P7 P10 |
 | 品牌 / 包名 | `@looma/saas` 在 looma 单仓 | workspace 已是 `vultr-genzltd-tspace`，包名仍 `@looma/*` | P11 |
 | 真机路径 | 境内两台机路径不同（不在此展开） | 仓内期望 `STACK_DIR=/opt/vultr-genzltd-stack`；Vultr 现网目录名仍是历史 | 旧通道停掉之前不改现网卷名 |
 
@@ -106,3 +106,4 @@ CI 覆盖：`backend-test` 先 `assert-contracts.sh`（P1）再 `dryrun.sh --sta
 | 2026-09-19 | 边界 | 境内内部差异不进本册；Mac 腾讯/天翼实勘只作取样 |
 | 2026-09-19 | 钉 | 同号规则 P1–P11；P2/P3/P10/P11 待补 |
 | 2026-09-19 | 核数 | heads/tag 定为 **21/70**（`gh api` 权威）。此前 10/68 系 THOMAS 克隆 `origin` 实为 Gitee 镜像 `szbenyx/looma-zervi` 的滞后视图；本机 `branch -r` 33 为未 prune 残留。清账名单以 GitHub 真源 21 条为准 |
+| 2026-09-19 | P1 执行 | 境内 Owner：`deploy-overseas.yml` 删除（`785c2a7`）、`release/overseas` 分支删除（heads 21→20）、`TestOverseasWorkflowContract` 改守缺席（`9751945`，P10 由无钉转有钉）；归档 tag 验证指向 `1323c84` 含全部超前提交。`rotate-overseas-stripe.yml`（手动触发、只 set_kv webhook secret、不 rsync）未动，待海外侧拍板 |
