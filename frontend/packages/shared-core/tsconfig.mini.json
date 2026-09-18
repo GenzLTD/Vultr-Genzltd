@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist/mini",
+    "declaration": true,
+    "declarationDir": "dist/mini",
+    "module": "commonjs",
+    "target": "es2018",
+    "lib": ["es2018"],
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "sourceMap": false,
+    "removeComments": true
+  },
+  "include": [
+    "src/entries/mini.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "**/*.test.ts",
+    "**/*.spec.ts"
+  ]
+}

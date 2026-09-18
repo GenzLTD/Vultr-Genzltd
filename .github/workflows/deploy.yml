@@ -1,238 +1,360 @@
 # =============================================================
-# Vultr-Genzltd — 部署栈 CI
+# Vultr-Genzltd — 双门禁并行 → 单点扇入部署
 #
-#   铁律（与 Owner 约定一致）：**本地/CI 干跑通过，才允许动真机**。
-#   因此本工作流的默认行为是「只干跑」，且部署被双重门禁锁死：
+#   旧 overseas 管线的骨架是对的，本文件把它搬过来，并改掉第 3 步的源：
+#     compose / nginx / 契约 只从本仓取期望态，不再 rsync looma-zervi
+#     （那边的 compose 仍是 0.0.0.0，nginx 是产品仓历史件）。
 #
-#     push / PR             → 只跑 dryrun（无 SSH，不碰真机）
-#     workflow_dispatch
-#         dry_run=true  (默认) → 只跑 dryrun
-#         dry_run=false        → 还要 vars.DEPLOY_ENABLED == 'true'
-#                                 + environment: production 审批，才可能部署
+#   git tag stack-vX.Y.Z（或 workflow_dispatch）
+#           │  concurrency: deploy-stack + cancel-in-progress
+#           ├──────────────┬──────────────┐
+#           ▼              ▼
+#     backend-test     saas-build
+#     pytest+契约+干跑  pnpm tspace → artifact
+#           └──────┬───────┘
+#              needs: [backend-test, saas-build]
+#              if: 两项全绿 且 DEPLOY_ENABLED 且（tag 或 dispatch 非 dry_run）
+#                  ▼
+#               deploy  8 步串行
 #
-#   需要配置的参数见 README「生产机」一节。clone 本地干跑不需要 Secrets。
+#   现在还不能打 tag 部署：旧云主机服务仍在跑（overseas-* rsync 仍可能盖回 0.0.0.0）。
+#   tspace 源码已在 frontend/packages/saas，saas-build 会打出同源 artifact。
+#   vars.DEPLOY_ENABLED 保持非 true。禁止为了「试一下」打开。
 #
-#   启用部署前必读 docs/LIVE-FORENSICS-2026-09-18.md：在 looma-zervi 的
-#   overseas-* rsync 停掉之前，把本仓 compose 投到 /opt/looma-zervi/docker/
-#   会被静默盖回 0.0.0.0。DEPLOY_ENABLED 在那之前不要打开。
-#   本地 clone 以本仓 compose/ nginx/ backend/ docker/ 为准，不要去借 looma-zervi。
-#
-#   已证「收内网不会崩」的三条链路（实测）：
-#     · 宿主 nginx upstream looma_backend = 127.0.0.1:5200 → 收内网不影响回源
-#     · backend/redis/chromadb 三容器同在 looma-zervi_looma-net → 撤端口发布不断服
-#     · compose 首行 `name: looma-zervi` → 无论从哪个目录调用都是同一 project
+#   发版纪律：先 push 分支，再单独 push tag，避免 Actions 列表双记录。
 # =============================================================
-name: Vultr-Genzltd stack
+name: Deploy stack
 
 on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: '仅干跑校验（不投递、不重启、不碰真机）'
+        description: '仅跑双门禁（不 SSH、不碰真机）。部署另需 DEPLOY_ENABLED。'
         type: boolean
         default: true
-      apply_nginx:
-        description: '同时应用 nginx 配置（需 nginx/nginx.conf 有变更；默认关闭）'
-        type: boolean
-        default: false
+  # tag 触发不得加 paths：否则「只改契约/文档的 tag」会被滤掉。
+  # 分支 push 会跑双门禁但不进 deploy。发版请先 push 分支、再单独 push tag。
   push:
     branches: [main]
-    paths: ['compose/**', 'nginx/**', 'scripts/**', 'backend/**', 'docker/**', '.github/workflows/deploy.yml']
+    tags:
+      - 'stack-v*'
   pull_request:
-    paths: ['compose/**', 'nginx/**', 'scripts/**', 'backend/**', 'docker/**', '.github/workflows/deploy.yml']
 
 permissions:
   contents: read
 
 concurrency:
-  group: vultr-genzltd-stack
-  cancel-in-progress: false
+  group: deploy-stack
+  cancel-in-progress: true
 
 env:
-  DEPLOY_PATH: /opt/looma-zervi          # 现役 compose 所在；looma-zervi 的流水线也在管这里
-  STACK_DIR: /opt/vultr-genzltd-stack    # 本仓自有目录，与 looma-zervi 部署树隔离
+  DEPLOY_PATH: /opt/looma-zervi
+  STACK_DIR: /opt/vultr-genzltd-stack
 
 jobs:
   # ---------------------------------------------------------------
-  # 1) 干跑：纯校验，无 SSH，绝不可能碰到真机
+  # 门禁 A：后端（与 saas-build 并行，互不依赖）
   # ---------------------------------------------------------------
-  dryrun:
-    name: 干跑校验（无 SSH）
+  backend-test:
+    name: backend-test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: 环境自检
-        run: |
-          docker --version
-          docker compose version
-          python3 --version
+      - name: 契约层
+        run: bash scripts/assert-contracts.sh
 
-      - name: 六步断言
-        # 说明：--static 跳过第 6 步「回环绑定运行时实证」（需要真实网卡，
-        # 在开发机本地执行）。CI 以其余五步为门禁：布局组装 / compose 语法 /
-        # 端口收内网断言 / nginx -t / 基线指纹与精确 diff。
+      - name: 干跑（本仓期望态，无 SSH）
         run: bash scripts/dryrun.sh --static
 
-      - name: 变更集摘要
-        if: always()
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend deps
+        working-directory: backend
         run: |
-          echo "### 变更集 vs 现网基线" >> $GITHUB_STEP_SUMMARY
-          echo '```diff' >> $GITHUB_STEP_SUMMARY
-          diff -u baseline/docker-compose.yml compose/docker-compose.yml >> $GITHUB_STEP_SUMMARY || true
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: pytest（内存库）
+        working-directory: backend
+        env:
+          DATABASE_PATH: ":memory:"
+          JWT_SECRET: ci-test-secret
+          WECHAT_DEV_MODE: "true"
+          WECHAT_APPID: test_appid
+          WECHAT_SECRET: test_secret
+          DEEPSEEK_API_KEY: skip
+          DEEPSEEK_BASE_URL: https://api.deepseek.com/v1
+          CHROMA_PERSIST_DIR: /tmp/chroma_ci
+          DEPLOY_REGION: SG
+        run: python -m pytest tests/ -v --tb=short
 
   # ---------------------------------------------------------------
-  # 2) 投递：三重门禁（dry_run=false + DEPLOY_ENABLED=true + 环境审批）
+  # 门禁 B：前端产物（与 backend-test 并行）
+  #   dist 必须来自本 tag 的同一 commit；deploy 第一步下载，禁止现找。
   # ---------------------------------------------------------------
-  deploy:
-    name: 投递到真机
-    needs: dryrun
-    # vars.DEPLOY_ENABLED 是安全硬开关：解决完与 looma-zervi 流水线的双写冲突
-    # （README §七）之前，不要把它设为 'true'。
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == false && vars.DEPLOY_ENABLED == 'true' }}
+  saas-build:
+    name: saas-build
     runs-on: ubuntu-latest
-    environment: production          # 建议在 Settings → Environments 配 Required reviewers
+    outputs:
+      has_dist: ${{ steps.dist.outputs.has_dist }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: 准备 SSH
-        run: |
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ vars.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
-          chmod 600 ~/.ssh/known_hosts
-          echo "::add-mask::${{ vars.DEPLOY_HOST }}"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
 
-      - name: 投递部署契约（compose + scripts）
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Build tspace（同源 /v1，SG）
+        id: dist
+        working-directory: frontend
         env:
-          HOST: ${{ vars.DEPLOY_HOST }}
-          USER: ${{ vars.DEPLOY_USER || 'root' }}
+          VITE_API_BASE: ""
+          VITE_DEPLOY_REGION: SG
         run: |
           set -euo pipefail
-          OPT="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes"
-          TARGET="$USER@$HOST"
+          test -f packages/saas/package.json
+          pnpm install --frozen-lockfile
+          pnpm --filter @looma/saas build
+          test -f packages/saas/dist/index.html
+          echo "has_dist=true" >> "$GITHUB_OUTPUT"
 
-          # 备份现网 compose 到本仓自有目录（留在对方树里会被 rsync --delete 清掉）
-          ssh $OPT "$TARGET" "mkdir -p $STACK_DIR/backups && cp $DEPLOY_PATH/docker/docker-compose.yml $STACK_DIR/backups/docker-compose.yml.\$(date +%Y%m%d-%H%M%S)" || true
+      - name: Upload saas-dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: saas-dist
+          path: frontend/packages/saas/dist
+          retention-days: 1
+          if-no-files-found: error
 
-          scp $OPT compose/docker-compose.yml "$TARGET:$DEPLOY_PATH/docker/docker-compose.yml"
+  # ---------------------------------------------------------------
+  # 扇入：两项必须全绿。现网收款在跑 → 默认根本不进这个 job。
+  # ---------------------------------------------------------------
+  deploy:
+    name: Deploy to Vultr SG
+    runs-on: ubuntu-latest
+    needs: [backend-test, saas-build]
+    environment: production
+    if: >-
+      always()
+      && needs.backend-test.result == 'success'
+      && needs.saas-build.result == 'success'
+      && needs.saas-build.outputs.has_dist == 'true'
+      && vars.DEPLOY_ENABLED == 'true'
+      && (
+           (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/stack-v'))
+           || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false)
+         )
+    env:
+      SSH_HOST: ${{ vars.DEPLOY_HOST || secrets.VULTR_SSH_HOST }}
+      SSH_USER: ${{ vars.DEPLOY_USER || secrets.VULTR_SSH_USER || 'root' }}
+    steps:
+      - uses: actions/checkout@v4
 
-          # 脚本放独立目录，不写进 /opt/looma-zervi
-          ssh $OPT "$TARGET" "mkdir -p $STACK_DIR/scripts"
-          scp $OPT scripts/*.sh "$TARGET:$STACK_DIR/scripts/"
+      - name: "1 下载 saas-dist artifact（同 tag 同源前端）"
+        uses: actions/download-artifact@v4
+        with:
+          name: saas-dist
+          path: artifacts/saas
 
-      - name: .env 仅首次种入（已存在则跳过，永不覆盖）
-        # 兜底层：scripts/seed-env.sh 永不覆盖；防发版回滚线上密钥。
-        # 上游 looma-zervi 仓 deploy-overseas.yml 若仍 set_kv 全键覆盖，
-        # 本 seed-only 仍能把"被覆盖的密钥"挡在 .env 外。
-        # 根治见 proposals/looma-zervi-set_kv-seed-only.md（上游 PR 提案，未提交）。
+      - name: 校验 SSH
         env:
-          HOST: ${{ vars.DEPLOY_HOST }}
-          USER: ${{ vars.DEPLOY_USER || 'root' }}
+          KEY: ${{ secrets.SSH_PRIVATE_KEY || secrets.VULTR_SSH_PRIVATE_KEY }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
-            "$USER@$HOST" "ENV_FILE=$DEPLOY_PATH/backend/.env bash $STACK_DIR/scripts/seed-env.sh"
+          if [ -z "$KEY" ] || [ -z "${{ env.SSH_HOST }}" ]; then
+            echo "::error::缺少 SSH_PRIVATE_KEY / DEPLOY_HOST"
+            exit 1
+          fi
 
-      - name: 插值断言（防 DEPLOY_REGION 被兜成 US）
-        env:
-          HOST: ${{ vars.DEPLOY_HOST }}
-          USER: ${{ vars.DEPLOY_USER || 'root' }}
-        run: |
-          # 必须与 looma-zervi 流水线共用同一插值源：缺 --env-file 时
-          # ${DEPLOY_REGION:-US} 会把 SG 覆盖成 US（真实支付在跑，禁止漂移）。
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
-            "$USER@$HOST" "docker compose --env-file $DEPLOY_PATH/backend/.env -f $DEPLOY_PATH/docker/docker-compose.yml -p looma-zervi config | grep -q 'DEPLOY_REGION: SG' || { echo 'REFUSE: DEPLOY_REGION 插值不是 SG，拒绝重建'; exit 1; }"
+      - uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY || secrets.VULTR_SSH_PRIVATE_KEY }}
 
-      - name: 重建容器（对齐 looma-zervi 的调用方式）
-        env:
-          HOST: ${{ vars.DEPLOY_HOST }}
-          USER: ${{ vars.DEPLOY_USER || 'root' }}
+      - name: known_hosts
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
-            "$USER@$HOST" "docker compose --env-file $DEPLOY_PATH/backend/.env -f $DEPLOY_PATH/docker/docker-compose.yml -p looma-zervi up -d --no-build --remove-orphans backend redis chromadb"
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ env.SSH_HOST }}" >> ~/.ssh/known_hosts
+          echo 'SSH_CMD=ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o StrictHostKeyChecking=yes -o BatchMode=yes' >> "$GITHUB_ENV"
+          echo "DEPLOY_TARGET=${{ env.SSH_USER }}@${{ env.SSH_HOST }}" >> "$GITHUB_ENV"
 
-      - name: 端口收敛断言（服务端权威：P0 即部署终态）
+      - name: "2 Bootstrap：set_kv 每轮对齐 + seed_kv 密钥不覆盖"
         env:
-          HOST: ${{ vars.DEPLOY_HOST }}
-          USER: ${{ vars.DEPLOY_USER || 'root' }}
+          JWT_SECRET: ${{ secrets.VULTR_JWT_SECRET || secrets.ENV_JWT_SECRET }}
+          DEEPSEEK_API_KEY: ${{ secrets.VULTR_DEEPSEEK_API_KEY || secrets.ENV_DEEPSEEK_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.ENV_OPENAI_API_KEY }}
+          QCC_AUTH_TOKEN: ${{ secrets.VULTR_QCC_AUTH_TOKEN || secrets.ENV_QCC_AUTH_TOKEN }}
+          GOOGLE_CLIENT_ID: ${{ secrets.ENV_GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.ENV_GOOGLE_CLIENT_SECRET }}
+          STRIPE_SECRET_KEY: ${{ secrets.ENV_STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.ENV_STRIPE_WEBHOOK_SECRET }}
+          QCC_MCP_BASE_URL: ${{ vars.QCC_MCP_BASE_URL }}
         run: |
-          # 口径（Owner 2026-09-18）：端口「公开/收内网」由部署流程掌控，
-          # 每次部署的终态都必须是「收内网」。权威判据取自 docker，不依赖 runner 网络。
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
-            "$USER@$HOST" "bash -s" <<'REMOTE'
-          set -u
-          echo "--- 端口矩阵 ---"
-          docker ps --format '{{.Names}}  {{.Ports}}' | grep -E 'looma-(backend|redis|chromadb)' || true
-          ok=1
-          b="$(docker port looma-backend 5200/tcp 2>/dev/null | head -1)"
-          if [ "$b" = "127.0.0.1:5200" ]; then echo "backend   OK   ${b}"; else echo "REFUSE backend 期望 127.0.0.1:5200，实为 [${b}]"; ok=0; fi
-          for pair in looma-redis:6379 looma-chromadb:8000; do
-            c="${pair%%:*}"; p="${pair##*:}"
-            out="$(docker port "$c" "$p/tcp" 2>/dev/null | head -1)"
-            if [ -z "$out" ]; then echo "${c}   OK   无宿主端口"; else echo "REFUSE ${c} 仍在发布 [${out}]"; ok=0; fi
-          done
-          [ "$ok" = "1" ] || { echo "端口未收敛，拒绝判定部署成功"; exit 1; }
-          REMOTE
+          set -euo pipefail
+          $SSH_CMD "$DEPLOY_TARGET" "mkdir -p $STACK_DIR/scripts"
+          scp -o BatchMode=yes scripts/env-kv.sh scripts/bootstrap-env.sh \
+            "$DEPLOY_TARGET:$STACK_DIR/scripts/"
+          $SSH_CMD "$DEPLOY_TARGET" \
+            "DEPLOY_PATH=$DEPLOY_PATH STACK_DIR=$STACK_DIR ENV_FILE=$DEPLOY_PATH/backend/.env \
+             JWT_SECRET='$JWT_SECRET' DEEPSEEK_API_KEY='$DEEPSEEK_API_KEY' \
+             OPENAI_API_KEY='$OPENAI_API_KEY' QCC_AUTH_TOKEN='$QCC_AUTH_TOKEN' \
+             GOOGLE_CLIENT_ID='$GOOGLE_CLIENT_ID' GOOGLE_CLIENT_SECRET='$GOOGLE_CLIENT_SECRET' \
+             STRIPE_SECRET_KEY='$STRIPE_SECRET_KEY' STRIPE_WEBHOOK_SECRET='$STRIPE_WEBHOOK_SECRET' \
+             QCC_MCP_BASE_URL='$QCC_MCP_BASE_URL' \
+             bash $STACK_DIR/scripts/bootstrap-env.sh"
 
-      - name: 公网不可达断言（独立于服务端自证）
-        env:
-          HOST: ${{ vars.DEPLOY_HOST }}
+      - name: "3 rsync 本仓期望态 → STACK_DIR/releases/<tag>（不 --delete 现网 /opt）"
         run: |
-          # 从公网独立复核：三个端口都必须打不通（closed / filtered 皆算通过）。
-          fail=0
-          for p in 5200 6379 8000; do
-            if timeout 6 bash -c "echo > /dev/tcp/$HOST/$p" 2>/dev/null; then
-              echo "REFUSE: 公网仍可连 $HOST:$p"
-              fail=1
-            else
-              echo "OK: 公网不可达 $HOST:$p"
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          case "$TAG" in
+            stack-v*) ;;
+            *) TAG="sha-${GITHUB_SHA:0:12}" ;;
+          esac
+          REL="$STACK_DIR/releases/$TAG"
+          $SSH_CMD "$DEPLOY_TARGET" "mkdir -p $REL $DEPLOY_PATH/docker $DEPLOY_PATH/backend $STACK_DIR/backups"
+          # 3a 不可变快照（本仓整树，不含密钥）
+          rsync -avz -e "$SSH_CMD" \
+            --exclude='.git' \
+            --exclude='local/' \
+            --exclude='dryrun/' \
+            --exclude='node_modules' \
+            --exclude='**/__pycache__' \
+            --exclude='**/*.pyc' \
+            --exclude='backend/.env' \
+            --exclude='*.env' \
+            ./ \
+            "$DEPLOY_TARGET:$REL/"
+          $SSH_CMD "$DEPLOY_TARGET" "ln -sfn $REL $STACK_DIR/current && echo $TAG $GITHUB_SHA \$(date -u +%Y-%m-%dT%H:%M:%SZ) > $STACK_DIR/CURRENT_RELEASE"
+          $SSH_CMD "$DEPLOY_TARGET" "cp $DEPLOY_PATH/docker/docker-compose.yml $STACK_DIR/backups/docker-compose.yml.\$(date +%Y%m%d-%H%M%S) || true"
+          rsync -avz -e "$SSH_CMD" docker/ "$DEPLOY_TARGET:$DEPLOY_PATH/docker/"
+          rsync -avz -e "$SSH_CMD" compose/docker-compose.yml \
+            "$DEPLOY_TARGET:$DEPLOY_PATH/docker/docker-compose.yml"
+          rsync -avz -e "$SSH_CMD" \
+            --exclude='.env' --exclude='**/__pycache__' \
+            backend/ "$DEPLOY_TARGET:$DEPLOY_PATH/backend/"
+          echo "compose/nginx 源 = 本仓（127.0.0.1:5200 + 无裸域），不是 looma-zervi"
+
+      - name: "4 rsync poetry 数据（仓里有才投）"
+        run: |
+          if [ -d data/poetry_full ] && [ "$(find data/poetry_full -type f ! -name '.gitkeep' | wc -l)" -gt 0 ]; then
+            rsync -avz -e "$SSH_CMD" data/poetry_full/ \
+              "$DEPLOY_TARGET:$DEPLOY_PATH/data/poetry_full/"
+          else
+            echo "仓内无 poetry 数据，沿用服务器副本"
+          fi
+
+      - name: "5 rsync 前端 → /var/www/saas/dist（--delete 原子覆盖）"
+        run: |
+          rsync -avz -e "$SSH_CMD" --delete \
+            artifacts/saas/ \
+            "$DEPLOY_TARGET:/var/www/saas/dist/"
+          $SSH_CMD "$DEPLOY_TARGET" "find /var/www/saas/dist -type f | wc -l"
+
+      - name: "6 nginx：本仓 nginx/nginx.conf → /etc；-t 过了才 reload（不停 80/443）"
+        run: |
+          $SSH_CMD "$DEPLOY_TARGET" "bash -s" << NGINX
+          set -euo pipefail
+          SRC="$STACK_DIR/current/nginx/nginx.conf"
+          if [ ! -f "\$SRC" ]; then
+            echo "REFUSE: 缺少 \$SRC（必须是本仓 nginx/nginx.conf）" >&2
+            exit 1
+          fi
+          cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak-\$(date +%Y%m%d-%H%M%S) || true
+          cp "\$SRC" /etc/nginx/nginx.conf.new
+          nginx -t -c /etc/nginx/nginx.conf.new
+          mv /etc/nginx/nginx.conf.new /etc/nginx/nginx.conf
+          # 进化：现网收款在跑，禁止 stop/kill 80/443。语法门禁保留，动作用 reload。
+          if systemctl is-active --quiet nginx; then
+            systemctl reload nginx
+          else
+            systemctl start nginx
+          fi
+          systemctl is-active --quiet nginx
+          echo "nginx reloaded from \$SRC"
+          NGINX
+
+      - name: "7 Docker：git_commit 先写；hash marker 决定是否重建；不 down 整栈"
+        run: |
+          $SSH_CMD "$DEPLOY_TARGET" "bash -s" << DOCKER
+          set -euo pipefail
+          DEPLOY_PATH="$DEPLOY_PATH"
+          COMPOSE="docker compose --env-file \${DEPLOY_PATH}/backend/.env -f \${DEPLOY_PATH}/docker/docker-compose.yml -p looma-zervi"
+          docker compose --env-file \${DEPLOY_PATH}/backend/.env -f \${DEPLOY_PATH}/docker/docker-compose.yml -p looma-zervi config | grep -q 'DEPLOY_REGION: SG' \
+            || { echo 'REFUSE: DEPLOY_REGION 插值不是 SG'; exit 1; }
+
+          HASH=\$(sha256sum \${DEPLOY_PATH}/backend/requirements.txt \${DEPLOY_PATH}/docker/Dockerfile.backend | sha256sum | awk '{print \$1}')
+          MARKER=/tmp/looma-backend-image.hash
+          NEED_BUILD=1
+          if [ -f "\$MARKER" ] && [ "\$(cat "\$MARKER")" = "\$HASH" ]; then
+            if docker image inspect looma-zervi-backend:latest >/dev/null 2>&1; then
+              NEED_BUILD=0
+              echo "=== 镜像 hash 未变，跳过 15 分钟重建 ==="
             fi
-          done
-          [ "$fail" = "0" ] || exit 1
+          fi
+          if [ "\$NEED_BUILD" = "1" ]; then
+            echo "=== Build backend image (pypi.org) ==="
+            DOCKER_BUILDKIT=1 \$COMPOSE build --build-arg PIP_INDEX_URL=https://pypi.org/simple backend
+            echo "\$HASH" > "\$MARKER"
+          fi
 
-      - name: 应用 nginx（仅勾选 apply_nginx 时；test 后 reload，绝不停服）
-        if: ${{ inputs.apply_nginx == true }}
-        env:
-          HOST: ${{ vars.DEPLOY_HOST }}
-          USER: ${{ vars.DEPLOY_USER || 'root' }}
+          echo "=== git_commit 必须在容器启动前写入 ==="
+          echo "${{ github.sha }}" > "\${DEPLOY_PATH}/backend/git_commit.txt"
+          cat "\${DEPLOY_PATH}/backend/git_commit.txt"
+
+          # 进化：现网收款在跑，禁止 compose down 整栈（redis/chroma 有状态）。
+          \$COMPOSE up -d --remove-orphans --no-build backend redis chromadb
+
+          b="\$(docker port looma-backend 5200/tcp 2>/dev/null | head -1)"
+          [ "\$b" = "127.0.0.1:5200" ] || { echo "REFUSE backend 端口 \$b"; exit 1; }
+          echo "=== 端口收内网 OK \$b ==="
+          DOCKER
+
+      - name: "8a 本机健康（5200 + Host api.genz.ltd）"
         run: |
-          # P0 不改 nginx。覆盖前先备份 /etc 现网文件，避免丢掉手工改动或证书路径调整。
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
-            "$USER@$HOST" "cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak-\$(date +%Y%m%d-%H%M%S) \
-             && cp $DEPLOY_PATH/docker/nginx.conf /etc/nginx/nginx.conf.new \
-             && nginx -t -c /etc/nginx/nginx.conf.new \
-             && mv /etc/nginx/nginx.conf.new /etc/nginx/nginx.conf \
-             && systemctl reload nginx && echo nginx-reloaded"
+          $SSH_CMD "$DEPLOY_TARGET" "bash $STACK_DIR/current/scripts/healthcheck.sh"
 
-      - name: 健康门禁（退出码即结论）
-        env:
-          HOST: ${{ vars.DEPLOY_HOST }}
-          USER: ${{ vars.DEPLOY_USER || 'root' }}
+      - name: "8b 公网健康（只断言本管线：api + tspace；不替 Vercel 背书）"
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
-            "$USER@$HOST" "bash $STACK_DIR/scripts/healthcheck.sh"
+          set -euo pipefail
+          echo "=== https://api.genz.ltd/health ==="
+          curl -sf --connect-timeout 20 "https://api.genz.ltd/health"
+          echo
+          echo "=== tspace 同源 login 代理 ==="
+          curl -sf --connect-timeout 20 -X POST "https://tspace.genz.ltd/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d '{"email":"beta_free@looma.test","password":"looma123"}' | head -c 80
+          echo
+          echo "=== tspace /register CTA ==="
+          REG_CODE=$(curl -sS -o /tmp/tspace-register.html -w '%{http_code}' --connect-timeout 20 \
+            "https://tspace.genz.ltd/register")
+          echo "HTTP ${REG_CODE}"
+          [ "${REG_CODE}" = "200" ] || { echo "::error::tspace /register 期望 200"; exit 1; }
 
-      - name: 失败即回滚（仅服务不健康时；端口断言失败刻意不回滚）
+      - name: 失败且 /health 已死才回滚 compose
         if: failure()
-        env:
-          HOST: ${{ vars.DEPLOY_HOST }}
-          USER: ${{ vars.DEPLOY_USER || 'root' }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
-            "$USER@$HOST" "STACK_DIR=$STACK_DIR DEPLOY_PATH=$DEPLOY_PATH bash -s" <<'REMOTE'
+          $SSH_CMD "$DEPLOY_TARGET" "STACK_DIR=$STACK_DIR DEPLOY_PATH=$DEPLOY_PATH bash -s" << 'REMOTE'
           set -u
           if curl -sf -m 5 http://127.0.0.1:5200/health >/dev/null 2>&1; then
-            echo "服务在跑 -> 判定为前置/端口断言失败，不回滚"
-            echo "（回滚只会把 5200/6379/8000 重新暴露到公网，风险更高）"
+            echo "服务仍在跑 → 前置/端口断言失败，不回滚（回滚可能把端口重新暴露）"
             exit 1
           fi
           LAST="$(ls -1 "${STACK_DIR}"/backups/docker-compose.yml.* 2>/dev/null | tail -1)"
-          if [ -z "${LAST}" ]; then echo "无备份可回滚"; exit 1; fi
+          [ -n "${LAST}" ] || { echo "无备份"; exit 1; }
           cp "${LAST}" "${DEPLOY_PATH}/docker/docker-compose.yml"
           docker compose --env-file "${DEPLOY_PATH}/backend/.env" \
             -f "${DEPLOY_PATH}/docker/docker-compose.yml" -p looma-zervi \
             up -d --no-build --remove-orphans backend redis chromadb
-          echo "已回滚到 ${LAST}（注意：端口恢复公网可达，属止血态，须立刻处理）"
+          echo "已回滚 compose 到 ${LAST}"
           REMOTE

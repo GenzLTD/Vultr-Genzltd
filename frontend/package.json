@@ -1,0 +1,15 @@
+{
+  "name": "vultr-genzltd-tspace",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Overseas tspace (@looma/saas) workspace. Built in CI, rsynced to /var/www/saas/dist. Not PlanetX / genz-web / miniprogram.",
+  "scripts": {
+    "build:saas": "pnpm --filter @looma/saas build",
+    "dev:saas": "pnpm --filter @looma/saas dev"
+  },
+  "engines": {
+    "node": ">=18",
+    "pnpm": ">=8"
+  },
+  "packageManager": "pnpm@9.15.4"
+}

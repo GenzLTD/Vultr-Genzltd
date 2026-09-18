@@ -1,14 +1,15 @@
-#!/usr/bin/env bash
+#!/usr/bin/env sh
 # =============================================================
 # dryrun.sh — 本地干跑（绝不动真机）
 #
 #   只依赖本仓目录树，不组装 /opt/looma-zervi，不要求旁边有 looma-zervi。
 #     1) 本仓内补齐 data/ 与 backend/.env 桩
-#     2) docker compose config 语法校验
-#     3) 端口收内网断言：唯一允许发布的宿主端口是 127.0.0.1:5200
-#     4) nginx -t（容器内 nginx，读本仓 nginx/nginx.conf）
-#     5) 裸域 Host 不得回归 + compose 相对 baseline 仍是端口收敛
-#     6) 运行时：回环绑定在其它网卡上不可达
+#     2) GFCC 契约层（SOURCE 钉 + JSON + $ref）
+#     3) docker compose config 语法校验
+#     4) 端口收内网断言：唯一允许发布的宿主端口是 127.0.0.1:5200
+#     5) nginx -t（容器内 nginx，读本仓 nginx/nginx.conf）
+#     6) 裸域 Host 不得回归 + circle 片段在仓、未进现行 conf + compose 相对 baseline
+#     7) 运行时：回环绑定在其它网卡上不可达
 #
 #   用法:
 #     bash scripts/dryrun.sh            # 全量
@@ -16,9 +17,10 @@
 #
 #   退出码: 0 = 干跑全绿；非 0 = 有断言失败
 # =============================================================
-set -uo pipefail
+set -u
+(set -o pipefail) 2>/dev/null && set -o pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 SSL_DIR="$ROOT/dryrun/layout/ssl"
@@ -70,6 +72,8 @@ if [ ! -f "$COMPOSE" ]; then no "缺少 $COMPOSE"; else ok "compose: compose/doc
 if [ ! -f "$NGINX_CONF" ]; then no "缺少 $NGINX_CONF"; else ok "nginx: nginx/nginx.conf"; fi
 if [ ! -d "$ROOT/backend" ]; then no "缺少 backend/（本仓应自带，不要去借 looma-zervi）"; else ok "backend/: 本仓自带"; fi
 if [ -f "$ROOT/docker/Dockerfile.backend" ]; then ok "docker/Dockerfile.backend"; else no "缺少 docker/Dockerfile.backend"; fi
+if [ -f "$ROOT/frontend/packages/saas/package.json" ]; then ok "frontend: @looma/saas"; else no "缺少 frontend/packages/saas（tspace 必须能在本仓构建）"; fi
+if [ -f "$ROOT/frontend/pnpm-lock.yaml" ]; then ok "frontend/pnpm-lock.yaml"; else no "缺少 frontend/pnpm-lock.yaml"; fi
 if [ -n "$PY" ]; then ok "python: $PY"; else no "找不到 python3 / python / py（可设 PYTHON_BIN）"; fi
 if [ "$fail" -ne 0 ]; then
   printf '\n\033[31m布局不齐，停止。\033[0m\n'
@@ -77,7 +81,16 @@ if [ "$fail" -ne 0 ]; then
 fi
 
 # -------------------------------------------------------------
-hdr 2 "docker compose 语法校验"
+hdr 2 "GFCC 契约层（无钉则 tag 无法回滚协议）"
+# 直接调 python，避免 Windows 上 `bash` 被解析成 WSL 空壳。
+if runpy "$ROOT/tools/validate_contracts.py" "$ROOT/contracts/gfcc"; then
+  ok "契约层门禁通过"
+else
+  no "契约层门禁失败"
+fi
+
+# -------------------------------------------------------------
+hdr 3 "docker compose 语法校验"
 if docker compose -f "$COMPOSE" --project-directory "$ROOT/compose" config -q 2>"$ERR_DIR/compose.err"; then
   ok "compose 语法通过"
   rm -f "$ERR_DIR/compose.err"
@@ -87,7 +100,7 @@ else
 fi
 
 # -------------------------------------------------------------
-hdr 3 "端口收内网断言（唯一允许发布: ${ALLOWED_PUBLISHED}）"
+hdr 4 "端口收内网断言（唯一允许发布: ${ALLOWED_PUBLISHED}）"
 RENDERED="$ERR_DIR/rendered.json"
 if docker compose -f "$COMPOSE" --project-directory "$ROOT/compose" config --format json >"$RENDERED" 2>/dev/null; then
   runpy - "$RENDERED" "$ALLOWED_PUBLISHED" <<'PY'
@@ -130,7 +143,7 @@ else
 fi
 
 # -------------------------------------------------------------
-hdr 4 "nginx -t 语法校验"
+hdr 5 "nginx -t 语法校验"
 img=""
 for cand in "$NGINX_IMAGE" nginx:1.20 nginx:alpine; do
   if docker pull -q "$cand" >/dev/null 2>&1; then img="$cand"; break; fi
@@ -156,7 +169,7 @@ else
 fi
 
 # -------------------------------------------------------------
-hdr 5 "期望态断言（本仓 nginx / compose，不是生产机路径）"
+hdr 6 "期望态断言（本仓 nginx / compose，不是生产机路径）"
 runpy - "$NGINX_CONF" <<'PY'
 import re, sys
 path = sys.argv[1]
@@ -198,8 +211,46 @@ else
   ok "nginx 已相对 baseline 摘掉裸域（这是期望态，不是事故）"
 fi
 
+CIRCLE_SNIPPET="$ROOT/nginx/sites/circle.genz.ltd.conf"
+runpy - "$NGINX_CONF" "$CIRCLE_SNIPPET" <<'PY'
+import re, sys
+main, snippet = sys.argv[1], sys.argv[2]
+main_text = open(main, encoding="utf-8").read()
+rc = 0
+tokens = []
+for m in re.finditer(r"(?m)^\s*server_name\s+([^;]+);", main_text):
+    tokens.extend(t for t in m.group(1).split() if t)
+if "circle.genz.ltd" in tokens:
+    print("  \033[31m✗\033[0m 现行 nginx.conf 已有 server_name circle.genz.ltd —— 必须走独立 tag 解开，禁止混进默认 conf")
+    rc = 1
+else:
+    print("  \033[32m✓\033[0m 现行 nginx.conf 尚未收 circle.genz.ltd（片段另存）")
+try:
+    snip = open(snippet, encoding="utf-8").read()
+except FileNotFoundError:
+    print(f"  \033[31m✗\033[0m 缺少 circle 片段: {snippet}")
+    sys.exit(1)
+if not re.search(r"(?m)^\s*server_name\s+circle\.genz\.ltd\s*;", snip):
+    print("  \033[31m✗\033[0m circle 片段缺少 server_name circle.genz.ltd")
+    rc = 1
+else:
+    print("  \033[32m✓\033[0m circle 片段 Host: circle.genz.ltd")
+if "127.0.0.1:5211" not in snip:
+    print("  \033[31m✗\033[0m circle 片段未指向回环 127.0.0.1:5211")
+    rc = 1
+else:
+    print("  \033[32m✓\033[0m circle 片段上游 127.0.0.1:5211（kernel 未进 compose 前不得解开 include）")
+if "location /circle/" not in snip:
+    print("  \033[31m✗\033[0m circle 片段缺少 location /circle/")
+    rc = 1
+else:
+    print("  \033[32m✓\033[0m circle 路径 /circle/")
+sys.exit(rc)
+PY
+[ $? -ne 0 ] && fail=1
+
 # -------------------------------------------------------------
-hdr 6 "运行时语义实证：回环绑定在其它网卡不可达"
+hdr 7 "运行时语义实证：回环绑定在其它网卡不可达"
 if [ "$RUNTIME" -eq 0 ]; then
   echo "     （--static 已跳过）"
 elif [ -z "$img" ]; then

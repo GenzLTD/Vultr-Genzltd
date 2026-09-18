@@ -49,12 +49,14 @@
 1. **P0 无需重建镜像**——端口只在 compose 里，`up -d` 即生效（这也解释了 P0 的 502 只有几秒量级）。
 2. **C2（镜像仓库化）不是小改**——它必须删掉 `backend/` 这条 bind mount、把代码 `COPY` 进镜像。
 
-### 2.3 版本锚点现状（脆弱）
+### 2.3 版本锚点现状（脆弱 → 要用 stack-v* 取代）
 
-- `backend/git_commit.txt` = **`a52638e5017de7eb18171ab6af0769aadeb53038`**（root，09-17 13:27）——旧流水线写入，**目前唯一的版本锚点**。
+- `backend/git_commit.txt` = **`a52638e5017de7eb18171ab6af0769aadeb53038`**（root，09-17 13:27）——旧流水线写入，**目前唯一的现网版本锚点**。
 - `/opt/looma-zervi/.git` 存在，但是**零 commit 的空仓**：`branch main` 却 `git log` 报
   *"does not have any commits yet"*，所有文件 `??` untracked（`.git` 由 root 于 09-18 04:28 创建）。
-  → **git 无法用于版本对账或回滚**。C2 落地后应以**镜像 digest** 取代该锚点。
+  → **git 无法用于版本对账或回滚**。这正是本仓要打 `stack-v*`、把树落到 `/opt/vultr-genzltd-stack/releases/<tag>/` 的原因。
+- GFCC 契约钉（仓内，尚未随 tag 上机）：Ask/五端口 **1.2.0**、信号 **1.0.0**，来源 `GenzLTD/gfcc@435c80b8`。没有这份钉，回滚只能还原文件，不知道协议是哪一版。
+- C2 落地后镜像 digest 与 `stack-v*` 并列，取代 `git_commit.txt`。
 
 ### 2.4 其他实测
 
@@ -121,7 +123,7 @@
 | # | 事项 | 现状矛盾 | 选项 |
 |---|---|---|---|
 | D1 | **Cloudflare 回源模式** | `nginx.conf:24` 注释写「Flexible → port 80」，`scripts/deploy-overseas.sh` 写「self-signed cert + Full mode」——**同一套部署自相矛盾** | A) Full + Origin 证书 + 放行 443（安全，需 CF 侧操作）；B) 明确 Flexible + 删除 443 块与 HSTS（最小改动，但 CF↔origin 明文） |
-| D2 | 443 上 HTTPS server 块 + HSTS | 公网 443 仍 filtered；摘块后只留 api / tspace | 随 D1 一并处置 |
+| D2 | 443 上 HTTPS server 块 + HSTS；`circle.genz.ltd` 是否收进本机 | 公网 443 仍 filtered；摘块后只留 api / tspace。仓内已有 `nginx/sites/circle.genz.ltd.conf`，**未** include。DNS 现仍可能指天翼 | 随 D1 处置 443。circle 进现网必须是独立 `stack-v*`（kernel :5211 + DNS 已切），禁止手改 nginx |
 | ~~D3~~ | ~~镜像未仓库化~~ | **已拍板**：C2 镜像仓库化 | 待实施；调查笔记见 `docs/LIVE-FORENSICS-2026-09-18.md` |
 | D4 | 发版重写 `.env` | `looma-zervi` 的 `deploy-overseas.yml` 用 `set_kv` 每轮覆盖约 20 键（含 `STRIPE_WEBHOOK_SECRET`）→ 下次 tag 发版会把旧值写回 | 见 `proposals/looma-zervi-set_kv-seed-only.md`（上游补丁） |
 | D5 | 是否挂 Vultr Firewall Group | 当前无云防火墙；ufw 对 Docker 端口无效 | **建议 S4 之后再挂**（只放 22/80）作为容错层；需 Vultr Console 或 API token |
@@ -133,9 +135,11 @@
 | 2026-09-18 | **本仓 = 海外部署唯一真源**；`looma-zervi` 的 `deploy-overseas.yml` 废弃 | Owner 口径 |
 | 2026-09-18 | **S6 = C2 镜像仓库化**（compose 只留 `image:`，栈目录自包含） | Owner 选择；网络前提已实证（§2.1 出口 401） |
 | 2026-09-18 | **端口临时访问只走 SSH 隧道**，不开公网窗口 | Owner 口径 |
+| 2026-09-18 | **仓内必须有 GFCC 契约层**；发版骨架 = 双门禁并行 → tspace artifact → 单点 8 步；**现在禁止打 tag 部署** | 现网服务仍在跑；tspace 源码已进 `frontend/packages/saas`；`DEPLOY_ENABLED` 关 |
 
 ## 七、归属与治理
 
-- 本仓是海外栈的自包含真源：`compose/` `nginx/` `docker/` `backend/`。clone 不依赖 `looma-zervi` 工作副本。
-- 变更纪律：改本仓文件 → `scripts/dryrun.sh` 全绿 → 授权后才动真机。`baseline/` 只作回滚对照，不是期望态。
+- 本仓是海外栈的自包含真源：`contracts/` `compose/` `nginx/` `docker/` `backend/`。clone 不依赖 `looma-zervi` 工作副本。
+- 变更纪律：改本仓文件 → `scripts/assert-contracts.sh` + `scripts/dryrun.sh` 全绿 → `stack-v*` tag → 授权后才动真机。`baseline/` 只作回滚对照，不是期望态。
+- 回滚纪律：只从 `/opt/vultr-genzltd-stack/releases/<tag>/` 取树；目录不存在则拒绝。
 - 资源↔主体↔服务的完整对账以 docs 仓《资源-主体-服务对账表》为准。

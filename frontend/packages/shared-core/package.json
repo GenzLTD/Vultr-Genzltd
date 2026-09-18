@@ -1,0 +1,29 @@
+{
+  "name": "@looma/shared-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared core: API client, types, constants (dual-review required)",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./supabase": "./src/supabase.ts"
+  },
+  "miniprogram": "dist/mini/index.js",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "npm run build:main && npm run build:mini",
+    "build:main": "tsc --project tsconfig.json",
+    "build:mini": "node scripts/build-mini.mjs",
+    "clean": "rimraf dist",
+    "prebuild": "npm run clean"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "rimraf": "^5.0.10",
+    "typescript": "^5.4.0"
+  }
+}

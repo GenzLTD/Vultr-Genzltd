@@ -1,8 +1,8 @@
 # Vultr-Genzltd
 
-Vultr 海外机（`api.genz.ltd` / `tspace.genz.ltd`）的**自包含部署仓**。
+Vultr 海外机（`api.genz.ltd` / `tspace.genz.ltd`，以及后续 `circle.genz.ltd`）的**自包含部署仓**。
 
-`git clone` 之后，以本仓为唯一依据做本地干跑和构建。不要再 clone `looma-zervi`，不要在笔记本上建 `/opt/looma-zervi`，也不要按 ServBay / 某台 Mac 的路径去对齐。
+版本迭代的真源是 **GFCC 契约层 + `stack-v*` 不可变 tag**，不是手改现网。clone 之后以本仓为唯一依据做本地干跑和构建。不要再 clone `looma-zervi`，不要在笔记本上建 `/opt/looma-zervi`，也不要按 ServBay / 某台 Mac 的路径去对齐。
 
 范本：`GenzLTD/szbolent-cn`（一机一仓、clone 即可干跑）。
 
@@ -14,12 +14,17 @@ Vultr 海外机（`api.genz.ltd` / `tspace.genz.ltd`）的**自包含部署仓**
 
 | 你要动的 | 只改这里 |
 |---|---|
+| GFCC 契约钉（协议版本） | `contracts/gfcc/`（写作真源仍是 `GenzLTD/gfcc`） |
+| tspace 前端（CI 打 dist） | `frontend/packages/saas`（依赖 `frontend/packages/shared-core`） |
 | 容器端口与服务 | `compose/docker-compose.yml` |
-| Host 分流（nginx） | `nginx/nginx.conf` |
+| Host 分流（现行：api + tspace） | `nginx/nginx.conf` |
+| `circle.genz.ltd` 片段 | `nginx/sites/`（默认不进现行 conf） |
 | 后端代码（海外栈这一份） | `backend/` |
 | 镜像构建 | `docker/Dockerfile.backend` |
 | 环境变量键清单 | `.env.example`（真值永不入库） |
 | 本地校验 | `scripts/dryrun.sh` |
+| 打发版 tag | `scripts/release-tag.sh` |
+| 按 tag 回滚 | `scripts/rollback-tag.sh` |
 | 可选：Windows ServBay 旁路演示 | `local/`（只绑 18080/18081/18082） |
 
 **不要跟：**
@@ -41,14 +46,20 @@ Vultr 海外机（`api.genz.ltd` / `tspace.genz.ltd`）的**自包含部署仓**
 ```
 .
 ├── README.md                      # 本文件：clone 后只看这个
+├── contracts/gfcc/                # GFCC L0 钉（Ask 1.2.0 / 信号 1.0.0 + SOURCE.json）
 ├── compose/docker-compose.yml     # 期望态（P0：端口只绑 127.0.0.1:5200）
 ├── nginx/nginx.conf               # 期望态（api + tspace；裸域已摘）
-├── docker/                        # Dockerfile.backend + .dockerignore
+├── nginx/sites/                   # circle 等 Host 片段（解开 include = 独立 tag）
+├── frontend/                      # tspace：saas-build 打 dist，禁止手搓上传
+│   ├── packages/saas/
+│   └── packages/shared-core/
 ├── backend/                       # 海外栈后端（本仓自带，不向本机系统借）
 ├── data/poetry_full/              # 诗词库挂载点（空目录即可干跑）
 ├── data/chroma_models/
 ├── baseline/                      # 2026-09-18 晨间现网冻结（回滚对照，不是期望态）
 ├── scripts/dryrun.sh              # 本地干跑（不碰真机）
+├── scripts/release-tag.sh         # 契约+干跑全绿才允许打 stack-v*
+├── scripts/rollback-tag.sh        # 从 STACK_DIR/releases/<tag>/ 回滚
 ├── .env.example                   # 键清单；compose 校验用桩
 └── docs/LIVE-FORENSICS-2026-09-18.md  # 当时真机调查笔记（归档，不是入门）
 ```
@@ -77,11 +88,12 @@ bash scripts/dryrun.sh
 干跑会：
 
 1. 在本仓内补齐 `data/` 空目录，以及（仅当不存在时）用 `.env.example` 生成 `backend/.env` 桩——**不含真密钥**
-2. 对本仓 `compose/docker-compose.yml` 做 `docker compose config`
-3. 断言唯一允许发布的宿主端口是 `127.0.0.1:5200`
-4. 用容器跑 `nginx -t`（本仓 `nginx/nginx.conf`）
-5. 断言 nginx **没有**裸域 `server_name`，且 compose 相对 `baseline/` 仍是端口收敛
-6. （全量）证明 `127.0.0.1` 绑定在其它网卡不可达
+2. 校验 `contracts/gfcc`（SOURCE 钉、家族版本、仓内 `$ref`）
+3. 对本仓 `compose/docker-compose.yml` 做 `docker compose config`
+4. 断言唯一允许发布的宿主端口是 `127.0.0.1:5200`
+5. 用容器跑 `nginx -t`（本仓 `nginx/nginx.conf`）
+6. 断言 nginx **没有**裸域 `server_name`；`circle.genz.ltd` 只在 `nginx/sites/`，未混进现行 conf
+7. （全量）证明 `127.0.0.1` 绑定在其它网卡不可达
 
 退出码 0 才算过。Windows 用 Git Bash 或 WSL 跑上述脚本（仓库里没有 bash.exe 时，ServBay 的 `packages\git\usr\bin\sh.exe` 也可以）。不要用本机系统 nginx 去替代第 4 步。若 Git Bash 找不到 Python，指定后重跑：
 
@@ -108,6 +120,40 @@ docker compose -f compose/docker-compose.yml build \
 
 ---
 
+## 发版：双门禁并行 → 单点扇入（现在还不能打 tag 部署）
+
+旧 `deploy-overseas.yml` 的骨架保留：`backend-test` ∥ `saas-build`，两项全绿才进入 **一个** `deploy`，内部 8 步串行。前端产物必须是 artifact，保证后端、静态、`git_commit` 来自同一个 tag 的同一个 commit。
+
+本仓把第 3 步的源换成 **Vultr-Genzltd 期望态**（`compose/` 收内网、`nginx/nginx.conf` 无裸域、`contracts/gfcc`），不再 rsync looma-zervi 那份 `0.0.0.0` + 产品仓历史 nginx。
+
+| 步 | 动作 | 相对旧管线的进化 |
+|---|---|---|
+| 1 | 下载 `saas-dist` artifact | 同 |
+| 2 | `set_kv` 非密钥每轮对齐 + `seed_kv` 密钥只在缺失时写 | 落地 #19，防 Live whsec 被打回 |
+| 3 | rsync 本仓 → `STACK_DIR/releases/<tag>/`，再覆盖现役 compose/backend；**不** `--delete` `/opt/looma-zervi` | 源换本仓；禁止整树删除 |
+| 4 | poetry 数据（仓里有才投） | 同 |
+| 5 | 前端 → `/var/www/saas/dist` `--delete` | 同；缺 artifact 则根本进不了 deploy |
+| 6 | 本仓 `nginx/nginx.conf`，`nginx -t` 过了才动；**reload 不停 80/443** | 现网收款在跑，禁止 kill 监听 |
+| 7 | `git_commit.txt` 写在容器启动前；hash marker 决定是否重建镜像；**不 `compose down` 整栈** | redis/chroma 有状态 |
+| 8 | 本机 5200 + `Host: api.genz.ltd`，再公网 api health + tspace 同源 login + `/register` | **不** curl `genz.ltd`（Vercel 不是本管线） |
+
+工作流：`.github/workflows/deploy.yml`（已删掉另起的 `release.yml`，避免两项同步触发）。
+
+**现在不要打 tag、不要 `--push`、不要开 `DEPLOY_ENABLED`。** 旧机服务仍在跑；`overseas-*` 还可能把 compose 盖回 `0.0.0.0`。tspace 已在 `frontend/packages/saas`，`saas-build` 会打出同源 dist；缺的不是前端，是旧通道还没停。
+
+本地演练（不推远端）：
+
+```bash
+bash scripts/build-saas.sh                  # 打 dist；不要手搓上传
+bash scripts/release-tag.sh 0.1.0           # 允许打本地 tag；--push 被拒绝
+```
+
+收口顺序（以后，不是现在）：停 `looma-zervi` 的 `overseas-*` → `main` 上双门禁全绿（含 tspace 构建）→ 再谈第一个 `stack-v*` 与 `DEPLOY_ENABLED`。
+
+`circle.genz.ltd` 进现网必须是一次**单独的**后续 tag（解开 `nginx.conf` 里那行 include，且 kernel `:5211` 已在本机）。
+
+---
+
 ## 可选：Windows ServBay 三端口演示
 
 这不是 clone 前置，也不是真机 nginx。它用 ServBay 的 `nginx.exe` 另开前缀，**不改 80/443**，在本机仿真三站：
@@ -116,7 +162,7 @@ docker compose -f compose/docker-compose.yml build \
 |---|---|---|
 | 18080 | `genz.ltd` 官网 | `local/www/genz-web/`（自己 `pnpm --filter @looma/genz-web build` 拷进来） |
 | 18081 | `api.genz.ltd` | 反代 `127.0.0.1:5200` |
-| 18082 | `tspace.genz.ltd` | `local/www/tspace/`（构建产物或从真机 dist 拷贝） |
+| 18082 | `tspace.genz.ltd` | `local/www/tspace/`（`bash scripts/build-saas.sh` 后把 `frontend/packages/saas/dist` 拷进来） |
 
 ```powershell
 # 仓库根目录
@@ -134,8 +180,9 @@ docker compose -f compose/docker-compose.yml build \
 这些不要放进「clone 后我要在本仓验证」的清单：
 
 - Stripe Live webhook 轮换、真实收款
-- Cloudflare DNS / 回源模式切换
+- Cloudflare DNS / 回源模式切换（含把 `circle.genz.ltd` 从天翼切到本机）
 - `genz.ltd` / `www.genz.ltd` 营销站（Vercel）
+- 围坐 **kernel 实现**（Tatha / gfcc 进程）；本仓先收契约和 Host 片段
 - `szbolent.cn` 书店、橱窗
 - 停用 `looma-zervi` 的 `deploy-overseas.yml`（那是维护者切通道，不是 clone 步骤）
 
@@ -168,7 +215,9 @@ docker compose -f compose/docker-compose.yml build \
 | 项 | 状态 |
 |---|---|
 | 本仓自包含（backend / compose / nginx / docker） | 是。clone 即可干跑 |
-| nginx 期望态 | api + tspace；裸域已摘，与 2026-09-18 真机手操一致 |
+| GFCC 契约钉 | Ask/五端口 **1.2.0**、信号 **1.0.0**，来源 gfcc `435c80b8` |
+| nginx 期望态 | api + tspace；裸域已摘；circle 片段在仓、include 仍注释 |
 | compose 期望态 | 端口收内网（相对 `baseline/` 的 P0） |
+| `stack-v*` 发版 / 真机 `releases/` | 双门禁 YAML 已就位（含 tspace 构建）；**禁止打 tag 部署**；`DEPLOY_ENABLED` 关 |
 | 真机应用 P0 / 停旧通道 | 未授权，未做 |
 | 镜像仓库化（compose 只留 `image:`） | 已选方向，未实施。落地前仍用本仓 `backend/` bind mount |

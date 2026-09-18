@@ -1,0 +1,420 @@
+/**
+ * T 空间品牌 Token — 浅色 B 端 SaaS 控制台风格
+ * 基于人脉信任网络的撮合逻辑平台，符合职场合伙人专业工具方向
+ *
+ * Token taxonomy:
+ *   --color-*           Semantic colors
+ *   --color-bg-*        Background layers
+ *   --color-text-*      Text colors
+ *   --color-border*     Border colors
+ *   --sidebar-*         Sidebar layout
+ *   --header-*          Header layout
+ *   --radius-*          Border radius
+ *   --shadow-*          Shadows
+ *   --transition-*      Transition timing
+ *   --font-*            Typography
+ *   --btn-*             Button component tokens
+ *   --card-*            Card component tokens
+ *   --input-*           Form field tokens
+ *   --table-*           Data table tokens
+ *   --modal-*           Modal / overlay tokens
+ *   --chat-*            Chat component tokens
+ *   --sidebar-ui-*      Sidebar visual tokens
+ *   --z-*               Z-index scale
+ */
+
+:root {
+  /* ========================================================
+   * COLORS - 浅色 B 端 SaaS 控制台配色
+   * ======================================================== */
+
+  /* 主色 — 专业蓝 #145EFF，用于导航、主按钮、链接与数据高亮 */
+  --color-primary: #145EFF;
+  --color-primary-hover: #1047CC;
+  --color-primary-active: #0D3AA8;
+  --color-primary-light: #EBF0FF;
+  --color-primary-dim: rgba(20, 94, 255, 0.06);
+
+  /* 辅助色 — 用于图标、按钮、图表标签等 */
+  --color-orange: #F59E0B;
+  --color-orange-light: rgba(245, 158, 11, 0.1);
+  --color-green: #22C55E;
+  --color-green-light: rgba(34, 197, 94, 0.1);
+  --color-yellow: #FACC15;
+  --color-yellow-light: rgba(250, 204, 21, 0.1);
+  --color-purple: #875DEF;
+  --color-purple-light: rgba(135, 93, 239, 0.1);
+
+  /* 功能语义色 */
+  --color-success: #22C55E;
+  --color-success-light: rgba(34, 197, 94, 0.1);
+  --color-danger: #EF4444;
+  --color-danger-light: rgba(239, 68, 68, 0.1);
+  --color-warning: #F59E0B;
+  --color-warning-light: rgba(245, 158, 11, 0.1);
+  --color-info: #145EFF;
+  --color-info-light: rgba(20, 94, 255, 0.1);
+
+  /* Chart palette (for Dashboard / KPICard sparklines) */
+  --color-chart-1: #145EFF;
+  --color-chart-2: #22C55E;
+  --color-chart-3: #F59E0B;
+  --color-chart-4: #875DEF;
+  --color-chart-5: #EF4444;
+  --color-chart-6: #0EA5E9;
+
+  /* ========================================================
+   * BACKGROUND — 浅灰白底承载白色卡片模块
+   * ======================================================== */
+  --color-bg-page: #F1F4F6;
+  --color-bg-sidebar: #FFFFFF;
+  --color-bg-sidebar-hover: #F1F4F6;
+  --color-bg-sidebar-active: #EBF0FF;
+  --color-bg-card: #FFFFFF;
+  --color-bg-surface: #F8FAFC;
+  --color-bg-hover: #F1F5F9;
+  --color-bg-stripe: #F8FAFC;
+  --color-bg-overlay: rgba(15, 23, 42, 0.4);
+
+  /* ========================================================
+   * TEXT — 灰度层级，对比清晰
+   * ======================================================== */
+  --color-text-primary: #0F172A;
+  --color-text-secondary: #334155;
+  --color-text-muted: #64748B;
+  --color-text-disabled: #94A3B8;
+  --color-text-on-primary: #FFFFFF;
+  --color-text-link: var(--color-primary);
+
+  /* Sidebar text — 浅色侧边栏 */
+  --color-text-sidebar: #334155;
+  --color-text-sidebar-active: #145EFF;
+  --color-text-sidebar-muted: #94A3B8;
+
+  /* ========================================================
+   * BORDER — 细描边与背景分离
+   * ======================================================== */
+  --color-border: #E2E8F0;
+  --color-border-light: #F1F5F9;
+  --color-border-strong: #CBD5E1;
+  --color-border-focus: var(--color-primary);
+  --color-border-error: var(--color-danger);
+
+  /* ========================================================
+   * LAYOUT
+   * ======================================================== */
+  --sidebar-width: 240px;
+  --sidebar-collapsed-width: 64px;
+  --header-height: 56px;
+  --header-height-mobile: 48px;
+  --content-max-width: 1200px;
+
+  /* ========================================================
+   * SPACING — 统一间距体系，对齐 PlanetX 7 档
+   * ======================================================== */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --spacing-2xl: 48px;
+  --spacing-3xl: 64px;
+
+  /* ========================================================
+   * RADIUS — 圆角统一
+   * ======================================================== */
+  --radius-xs: 4px;
+  --radius-sm: 6px;    /* 标签 */
+  --radius-md: 8px;    /* 按钮、输入框 */
+  --radius-lg: 12px;   /* 大卡片 */
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* ========================================================
+   * SHADOWS — 轻阴影，信息密度适中
+   * ======================================================== */
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 6px rgba(15, 23, 42, 0.05);
+  --shadow-lg: 0 10px 15px rgba(15, 23, 42, 0.06);
+  --shadow-xl: 0 20px 25px rgba(15, 23, 42, 0.08);
+  --shadow-focus: 0 0 0 3px rgba(20, 94, 255, 0.15);
+
+  /* ========================================================
+   * TRANSITIONS
+   * ======================================================== */
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+  --transition-slow: 400ms ease;
+  --transition-sidebar: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-modal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ========================================================
+   * TYPOGRAPHY — Inter 优先，系统无则用 Inter + 思源黑体 SC
+   * ======================================================== */
+  --font-family: "Inter", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "SF Mono", "Fira Code", "JetBrains Mono", monospace;
+
+  /* 字号体系 — 对齐设计规范 */
+  --font-size-2xs: 0.625rem;   /* 10px */
+  --font-size-xs: 0.75rem;     /* 12px — 辅助说明、标签、分页、时间 */
+  --font-size-sm: 0.875rem;    /* 14px — 正文默认、表格、表单、列表 */
+  --font-size-base: 1rem;      /* 16px — 卡片标题、表头、侧栏菜单 */
+  --font-size-lg: 1.125rem;    /* 18px */
+  --font-size-xl: 1.25rem;     /* 20px — 大模块标题、弹窗标题 */
+  --font-size-2xl: 1.5rem;     /* 24px — 页面主标题 */
+  --font-size-3xl: 2rem;       /* 32px */
+
+  /* 行高体系 — 对齐设计规范 */
+  --line-height-2xs: 1.333;    /* 12px/16px */
+  --line-height-xs: 1.333;     /* 12px/16px */
+  --line-height-sm: 1.571;     /* 14px/22px */
+  --line-height-base: 1.5;     /* 16px/24px */
+  --line-height-lg: 1.556;     /* 18px/28px */
+  --line-height-xl: 1.4;       /* 20px/28px */
+  --line-height-2xl: 1.333;    /* 24px/32px */
+  --line-height-3xl: 1.25;     /* 32px/40px */
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* ========================================================
+   * BUTTON — component tokens
+   * ======================================================== */
+  --btn-height-sm: 30px;
+  --btn-height-md: 36px;
+  --btn-height-lg: 42px;
+
+  --btn-padding-sm: 0 12px;
+  --btn-padding-md: 0 16px;
+  --btn-padding-lg: 0 24px;
+
+  --btn-font-sm: 0.75rem;
+  --btn-font-md: 0.875rem;
+  --btn-font-lg: 1rem;
+
+  --btn-radius: var(--radius-md);
+  --btn-gap: 6px;
+  --btn-font-weight: var(--font-weight-medium);
+
+  --btn-bg-primary: var(--color-primary);
+  --btn-bg-primary-hover: var(--color-primary-hover);
+  --btn-bg-primary-active: var(--color-primary-active);
+
+  --btn-bg-secondary: var(--color-bg-surface);
+  --btn-bg-secondary-hover: var(--color-bg-hover);
+
+  --btn-bg-outline: transparent;
+  --btn-bg-outline-hover: var(--color-primary-light);
+
+  --btn-bg-danger: var(--color-danger);
+  --btn-bg-danger-hover: #DC2626;
+
+  --btn-text-primary: #ffffff;
+  --btn-text-secondary: var(--color-text-primary);
+  --btn-text-outline: var(--color-primary);
+  --btn-text-disabled: var(--color-text-disabled);
+
+  --btn-border-outline: 1px solid var(--color-border);
+  --btn-border-outline-hover: 1px solid var(--color-primary);
+  --btn-border-disabled: 1px solid var(--color-border-light);
+
+  --btn-shadow: var(--shadow-xs);
+  --btn-shadow-hover: var(--shadow-sm);
+  --btn-shadow-focus: var(--shadow-focus);
+
+  /* ========================================================
+   * CARD — component tokens
+   * ======================================================== */
+  --card-bg: var(--color-bg-card);
+  --card-bg-hover: var(--color-bg-surface);
+  --card-padding: 24px;
+  --card-padding-sm: 16px;
+  --card-padding-lg: 32px;
+  --card-gap: 16px;
+  --card-radius: var(--radius-lg);
+  --card-border: 1px solid var(--color-border);
+  --card-shadow: var(--shadow-sm);
+  --card-shadow-hover: var(--shadow-md);
+
+  --card-header-padding: 16px 24px;
+  --card-header-border: 1px solid var(--color-border-light);
+
+  /* ========================================================
+   * INPUT / FORM — component tokens
+   * ======================================================== */
+  --input-height-sm: 30px;
+  --input-height-md: 36px;
+  --input-height-lg: 42px;
+
+  --input-padding: 0 12px;
+  --input-padding-lg: 0 16px;
+
+  --input-bg: var(--color-bg-card);
+  --input-bg-disabled: var(--color-bg-surface);
+  --input-bg-focus: var(--color-bg-card);
+
+  --input-border: 1px solid var(--color-border);
+  --input-border-hover: 1px solid var(--color-border-strong);
+  --input-border-focus: 1px solid var(--color-border-focus);
+  --input-border-error: 1px solid var(--color-border-error);
+  --input-border-disabled: 1px solid var(--color-border-light);
+
+  --input-radius: var(--radius-md);
+  --input-font-size: var(--font-size-sm);
+  --input-placeholder: var(--color-text-muted);
+
+  --input-shadow-focus: var(--shadow-focus);
+
+  --label-color: var(--color-text-secondary);
+  --label-font-size: var(--font-size-sm);
+  --label-font-weight: var(--font-weight-medium);
+
+  --helper-color: var(--color-text-muted);
+  --helper-font-size: var(--font-size-xs);
+  --helper-error: var(--color-danger);
+  --helper-success: var(--color-success);
+
+  /* ========================================================
+   * DATA TABLE — component tokens
+   * ======================================================== */
+  --table-bg: var(--color-bg-card);
+  --table-bg-stripe: var(--color-bg-stripe);
+  --table-bg-hover: var(--color-bg-hover);
+  --table-bg-selected: var(--color-primary-light);
+
+  --table-border: 1px solid var(--color-border-light);
+  --table-border-header: 1px solid var(--color-border);
+
+  --table-header-bg: var(--color-bg-surface);
+  --table-header-color: var(--color-text-secondary);
+  --table-header-font-size: var(--font-size-xs);
+  --table-header-font-weight: var(--font-weight-semibold);
+  --table-header-text-transform: uppercase;
+  --table-header-letter-spacing: 0.5px;
+
+  --table-cell-padding: 12px 16px;
+  --table-cell-padding-compact: 8px 12px;
+  --table-cell-font-size: var(--font-size-sm);
+  --table-cell-color: var(--color-text-primary);
+
+  --table-radius: var(--radius-md);
+
+  /* ========================================================
+   * MODAL / OVERLAY — component tokens
+   * ======================================================== */
+  --modal-overlay: var(--color-bg-overlay);
+  --modal-bg: var(--color-bg-card);
+  --modal-max-width: 480px;
+  --modal-max-width-lg: 720px;
+  --modal-padding: 24px;
+  --modal-radius: var(--radius-lg);
+  --modal-border: none;
+  --modal-shadow: var(--shadow-xl);
+  --modal-header-border: 1px solid var(--color-border-light);
+  --modal-footer-bg: var(--color-bg-surface);
+
+  --modal-padding-sm: 16px;
+  --modal-padding-lg: 32px;
+
+  /* ========================================================
+   * CHAT — component tokens
+   * ======================================================== */
+  --chat-bubble-bg-user: var(--color-primary);
+  --chat-bubble-text-user: #ffffff;
+  --chat-bubble-bg-ai: var(--color-bg-surface);
+  --chat-bubble-text-ai: var(--color-text-primary);
+  --chat-bubble-radius: var(--radius-lg);
+  --chat-bubble-padding: 12px 16px;
+  --chat-bubble-gap: 8px;
+
+  --chat-input-bg: var(--color-bg-card);
+  --chat-input-border: 1px solid var(--color-border);
+  --chat-input-radius: var(--radius-lg);
+  --chat-input-height: 48px;
+
+  --chat-streaming-cursor: var(--color-primary);
+  --chat-streaming-cursor-width: 2px;
+
+  /* ========================================================
+   * SIDEBAR UI — visual tokens
+   * ======================================================== */
+  --sidebar-item-padding: 10px 16px;
+  --sidebar-item-radius: var(--radius-md);
+  --sidebar-item-gap: 2px;
+  --sidebar-item-font-size: var(--font-size-base);
+  --sidebar-active-border: none;
+  --sidebar-active-bg: var(--color-bg-sidebar-active);
+  --sidebar-icon-size: 18px;
+  --sidebar-icon-gap: 12px;
+
+  /* ========================================================
+   * KPI CARD — component tokens
+   * ======================================================== */
+  --kpi-card-padding: 20px;
+  --kpi-card-gap: 8px;
+  --kpi-label-font-size: var(--font-size-xs);
+  --kpi-label-color: var(--color-text-muted);
+  --kpi-value-font-size: 1.75rem;
+  --kpi-value-font-weight: var(--font-weight-bold);
+  --kpi-value-color: var(--color-text-primary);
+  --kpi-trend-font-size: var(--font-size-xs);
+  --kpi-trend-up: var(--color-success);
+  --kpi-trend-down: var(--color-danger);
+
+  /* ========================================================
+   * Z-INDEX SCALE
+   * ======================================================== */
+  --z-base: 0;
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-sidebar: 500;
+  --z-header: 600;
+  --z-overlay: 800;
+  --z-modal: 1000;
+  --z-toast: 1200;
+  --z-tooltip: 1300;
+
+  /* ========================================================
+   * TOOLTIP — component tokens
+   * ======================================================== */
+  --tooltip-bg: var(--color-text-primary);
+  --tooltip-color: #fff;
+  --tooltip-padding: 8px 12px;
+  --tooltip-radius: var(--radius-sm);
+  --tooltip-font-size: 0.75rem;
+  --tooltip-line-height: 1.4;
+  --tooltip-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
+  --tooltip-arrow-size: 6px;
+
+  /* ========================================================
+   * PROGRESS BAR — component tokens
+   * ======================================================== */
+  --progress-height-sm: 4px;
+  --progress-height-md: 8px;
+  --progress-height-lg: 12px;
+  --progress-radius: 9999px;
+  --progress-transition: width 0.3s ease;
+
+  /* ========================================================
+   * TOGGLE — component tokens
+   * ======================================================== */
+  --toggle-radius: 9999px;
+  --toggle-knob-shadow: 0 2px 4px rgba(15, 23, 42, 0.2);
+  --toggle-transition: background 0.2s ease, transform 0.2s ease;
+
+  /* ========================================================
+   * DATE PICKER — component tokens
+   * ======================================================== */
+  --datepicker-bg: var(--color-bg-card);
+  --datepicker-border: 1px solid var(--color-border);
+  --datepicker-radius: var(--radius-md);
+  --datepicker-shadow: 0 8px 24px rgba(15, 23, 42, 0.1);
+  --datepicker-cell-padding: 6px;
+  --datepicker-cell-radius: var(--radius-xs);
+  --datepicker-cell-hover: var(--color-bg-hover);
+  --datepicker-cell-selected: var(--color-primary);
+  --datepicker-cell-disabled: var(--color-text-disabled);
+}

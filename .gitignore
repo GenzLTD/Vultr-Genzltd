@@ -1,6 +1,9 @@
 # 干跑产物（每次运行由 scripts/dryrun.sh 重新生成）
 dryrun/layout/
 
+# tag 工作流在 runner 上生成，不入库（tag 本身即发版记录）
+/RELEASE.json
+
 # 从 Vultr /var/www/saas/dist 拉下来的 tspace 产物（不入库）
 local/www/tspace/
 # 本机 ServBay 用的 genz-web 构建产物
@@ -16,6 +19,12 @@ local/tmp-*.json
 *.env
 !.env.example
 !backend/.env.example
+
+# 前端工作区
+frontend/node_modules/
+frontend/packages/*/node_modules/
+frontend/packages/*/dist/
+frontend/.pnpm-store/
 
 # 后端缓存
 **/__pycache__/

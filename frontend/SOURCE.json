@@ -1,0 +1,12 @@
+{
+  "source_tree": "looma-zervi-wt-main/frontend",
+  "copied_at": "2026-09-18",
+  "git_commit": "fef232e",
+  "note": "Overseas tspace only (@looma/saas + @looma/shared-core). PlanetX / genz-web / miniprogram stay in looma-zervi. Product changes still land there first; refresh this pin the same way as contracts/gfcc/SOURCE.json, then a new stack-v*.",
+  "build": {
+    "command": "pnpm --filter @looma/saas build",
+    "VITE_API_BASE": "",
+    "VITE_DEPLOY_REGION": "SG",
+    "deploy_dest": "/var/www/saas/dist"
+  }
+}

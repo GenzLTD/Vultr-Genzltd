@@ -1,0 +1,51 @@
+{
+  "layer": "L0-pin",
+  "authority": "GenzLTD/gfcc",
+  "note": "gfcc 仍是契约的写作真源。本仓钉一份快照，使 stack-v* 发版与回滚能指到「当时生效的契约」，而不是猜现网或手工对齐。刷新钉必须改本文件 + 同步 JSON，再打新 tag。",
+  "repo": "https://github.com/GenzLTD/gfcc",
+  "commit": "435c80b8fcca4a69f65fac79b5306f607760751c",
+  "pinned_at": "2026-09-18",
+  "families": {
+    "l0": {
+      "version": "1.2.0",
+      "files": [
+        "ask.envelope.v1.json",
+        "circle.v1.json",
+        "identity.v1.json",
+        "memory.v1.json",
+        "consensus.v1.json",
+        "contribution.v1.json",
+        "roles.v1.json",
+        "registry.v1.json"
+      ]
+    },
+    "signal": {
+      "version": "1.0.0",
+      "files": [
+        "signal.envelope.v1.json",
+        "signals/personality_beacon.v1.json",
+        "signals/consensus_match.v1.json"
+      ]
+    }
+  },
+  "kernel": {
+    "entry": "POST /v1/ask",
+    "health": "GET /health",
+    "signal_entry": "POST /v1/signal-ingest",
+    "default_adapter": "stub",
+    "implementation_example": "tatha"
+  },
+  "circle": {
+    "host_desired": "circle.genz.ltd",
+    "path": "/circle/",
+    "invite": "?i= 16-char redeem, not JWT",
+    "not": ["a chat room product", "Discord clone", "self-serve accounts"],
+    "invariants": [
+      "AI is not a voting member of a circle",
+      "Dissolve does not delete Dual records"
+    ],
+    "included_in_production_nginx": false,
+    "snippet": "nginx/sites/circle.genz.ltd.conf",
+    "upstream_loopback": "127.0.0.1:5211"
+  }
+}

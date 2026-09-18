@@ -28,6 +28,16 @@ for ($i = 0; $i -lt 60; $i++) {
 }
 if (-not $ready) { throw "backend /health 未在 120s 内就绪，看: docker logs looma-backend" }
 
+$dist = Join-Path $Root "frontend\packages\saas\dist\index.html"
+if (Test-Path $dist) {
+  Write-Host "=== sync tspace dist → local/www/tspace ==="
+  $dest = Join-Path $Local "www\tspace"
+  if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+  Copy-Item -Recurse (Join-Path $Root "frontend\packages\saas\dist") $dest
+} else {
+  Write-Host "=== 无 frontend/packages/saas/dist，18082 沿用已有 local/www/tspace（先跑 bash scripts/build-saas.sh）==="
+}
+
 Write-Host "=== servbay nginx.exe -t / start (prefix local/) ==="
 $conf = "$Prefix/nginx.conf"
 $t = & $Nginx -t -p $Prefix -c $conf 2>&1
