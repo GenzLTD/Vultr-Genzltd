@@ -1,0 +1,100 @@
+name: looma-zervi
+
+services:
+  # ============================================
+  # Looma Backend (Flask)
+  # 镜像首次手动 docker compose build，后续 CI 只重启容器加载新代码
+  # ============================================
+  backend:
+    build:
+      context: ../backend
+      dockerfile: ../docker/Dockerfile.backend
+    container_name: looma-backend
+    restart: unless-stopped
+    ports:
+      # 收内网：仅绑定宿主回环。宿主 nginx 的 upstream looma_backend 指向
+      # 127.0.0.1:5200，故本改动不影响 nginx → backend 链路；
+      # 公网不再能直连 5200 绕过 nginx 的限流与审计。
+      - "127.0.0.1:5200:5200"
+    environment:
+      - FLASK_PORT=5200
+      # Explicit CORS for SaaS hosts (also set via backend/.env; keep both in sync)
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://genz.ltd,https://www.genz.ltd,https://tspace.genz.ltd,https://api.genz.ltd,https://app.genz.ltd,https://tspace.szbolent.cn,http://localhost:5173,http://localhost:5174,http://localhost:3000}
+      # Overseas: Google OAuth + payment providers + rate limiting
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-}
+      # Stripe keys live in backend/.env (env_file). Do NOT list them under
+      # environment: — compose interpolation of empty host vars would override
+      # env_file with blank and silently disable overseas checkout.
+      - PAYPAL_CLIENT_ID=${PAYPAL_CLIENT_ID:-}
+      - PAYPAL_CLIENT_SECRET=${PAYPAL_CLIENT_SECRET:-}
+      - PAYPAL_MODE=${PAYPAL_MODE:-sandbox}
+      - PAYPAL_WEBHOOK_ID=${PAYPAL_WEBHOOK_ID:-}
+      - AIRWALLEX_API_KEY=${AIRWALLEX_API_KEY:-}
+      - AIRWALLEX_CLIENT_KEY=${AIRWALLEX_CLIENT_KEY:-}
+      - AIRWALLEX_MODE=${AIRWALLEX_MODE:-demo}
+      - AIRWALLEX_WEBHOOK_SECRET=${AIRWALLEX_WEBHOOK_SECRET:-}
+      - RATE_LIMIT_STORAGE_URI=${RATE_LIMIT_STORAGE_URI:-memory://}
+      - DEPLOY_REGION=${DEPLOY_REGION:-US}
+      # QCC (企查查官方 MCP；2026-08-27 迁入 base，防 full.yml 重新生成丢配置。
+      # 注意：compose environment 优先于 backend/.env，重新生成 full.yml 前
+      # 必须确保插值源（docker/.env 或 shell）已配 QCC_ENABLED=true + QCC_AUTH_TOKEN)
+      - QCC_ENABLED=${QCC_ENABLED:-false}
+      - QCC_AUTH_TOKEN=${QCC_AUTH_TOKEN:-}
+    env_file:
+      - ../backend/.env
+    volumes:
+      # 代码 bind mount：rsync 后 restart 即生效，不需 rebuild
+      - ../backend:/app
+      - backend-data:/app/data
+      - chroma-data:/app/chroma_data
+      # 本地诗词向量库（宿主机 data/poetry_full → 容器内 /app/poetry_data）
+      - ../data/poetry_full:/app/poetry_data:ro
+      - ../data/chroma_models:/root/.cache/chroma/onnx_models
+    depends_on:
+      - redis
+    networks:
+      - looma-net
+
+  # ============================================
+  # ChromaDB (Vector Database)
+  # ============================================
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: looma-chromadb
+    restart: unless-stopped
+    # 收内网：不发布宿主端口。backend 经 looma-net 以服务名 chromadb:8000 访问。
+    # 原 "8000:8000" 等价 0.0.0.0 绑定，公网可达。
+    volumes:
+      - chroma-data:/chroma/chroma
+    environment:
+      - CHROMA_DB_IMPL=duckdb+parquet
+      - PERSIST_DIRECTORY=/chroma/chroma
+    networks:
+      - looma-net
+
+  # ============================================
+  # Redis (overseas: rate limiting + cache)
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: looma-redis
+    restart: unless-stopped
+    # 收内网：不发布宿主端口。原 "6379:6379" 等价 0.0.0.0 绑定，
+    # 且 redis 无 requirepass → 公网可无认证读写（限流存储可被投毒/清空）。
+    # backend 经 looma-net 以服务名 redis:6379 访问（RATE_LIMIT_STORAGE_URI）。
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    networks:
+      - looma-net
+
+volumes:
+  backend-data:
+  chroma-data:
+  redis-data:
+
+networks:
+  looma-net:
+    driver: bridge

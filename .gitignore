@@ -1,0 +1,11 @@
+# 干跑产物（每次运行由 scripts/dryrun.sh 重新生成）
+dryrun/layout/
+
+# 环境变量真值
+.env
+*.env
+!.env.example
+
+# 系统
+.DS_Store
+Thumbs.db

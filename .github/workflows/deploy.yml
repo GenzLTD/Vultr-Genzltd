@@ -1,0 +1,149 @@
+# =============================================================
+# Vultr-Genzltd — 部署栈 CI
+#
+#   铁律（与 Owner 约定一致）：**本地/CI 干跑通过，才允许动真机**。
+#   因此本工作流的默认行为是「只干跑」：
+#
+#     push / PR        → 只跑 dryrun（无 SSH，不碰真机）
+#     workflow_dispatch
+#         dry_run=true  (默认) → 只跑 dryrun
+#         dry_run=false        → dryrun 通过后，投递 + 重启 + 健康门禁
+#                                且受 environment: production 的审批保护
+#
+#   需要配置的参数（由 Owner 在 Settings 里填）见 README §六：
+#     secrets.SSH_PRIVATE_KEY   部署私钥（必填）
+#     vars.DEPLOY_HOST          目标机 IP/域名（必填）
+#     vars.DEPLOY_USER          登录用户（可选，默认 root）
+# =============================================================
+name: Vultr-Genzltd stack
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '仅干跑校验（不投递、不重启、不碰真机）'
+        type: boolean
+        default: true
+      apply_nginx:
+        description: '同时应用 nginx 配置（需 nginx/nginx.conf 有变更；默认关闭）'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths: ['compose/**', 'nginx/**', 'scripts/**', '.github/workflows/deploy.yml']
+  pull_request:
+    paths: ['compose/**', 'nginx/**', 'scripts/**', '.github/workflows/deploy.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vultr-genzltd-stack
+  cancel-in-progress: false
+
+env:
+  DEPLOY_PATH: /opt/looma-zervi
+
+jobs:
+  # ---------------------------------------------------------------
+  # 1) 干跑：纯校验，无 SSH，绝不可能碰到真机
+  # ---------------------------------------------------------------
+  dryrun:
+    name: 干跑校验（无 SSH）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 环境自检
+        run: |
+          docker --version
+          docker compose version
+          python3 --version
+
+      - name: 六步断言
+        # 说明：--static 跳过第 6 步「回环绑定运行时实证」（需要真实网卡，
+        # 在开发机本地执行）。CI 以其余五步为门禁：布局组装 / compose 语法 /
+        # 端口收内网断言 / nginx -t / 基线指纹与精确 diff。
+        run: bash scripts/dryrun.sh --static
+
+      - name: 变更集摘要
+        if: always()
+        run: |
+          echo "### 变更集 vs 现网基线" >> $GITHUB_STEP_SUMMARY
+          echo '```diff' >> $GITHUB_STEP_SUMMARY
+          diff -u baseline/docker-compose.yml compose/docker-compose.yml >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # ---------------------------------------------------------------
+  # 2) 投递：只在显式点「dry_run=false」时执行，且需环境审批
+  # ---------------------------------------------------------------
+  deploy:
+    name: 投递到真机
+    needs: dryrun
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == false }}
+    runs-on: ubuntu-latest
+    environment: production          # 建议在 Settings → Environments 配 Required reviewers
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 准备 SSH
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ vars.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 600 ~/.ssh/known_hosts
+          echo "::add-mask::${{ vars.DEPLOY_HOST }}"
+
+      - name: 投递部署契约（compose + scripts）
+        env:
+          HOST: ${{ vars.DEPLOY_HOST }}
+          USER: ${{ vars.DEPLOY_USER || 'root' }}
+        run: |
+          set -euo pipefail
+          OPT="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes"
+          TARGET="$USER@$HOST"
+
+          # 先备份现网 compose（回滚物）
+          ssh $OPT "$TARGET" "cp $DEPLOY_PATH/docker/docker-compose.yml \
+            $DEPLOY_PATH/docker/docker-compose.yml.bak-\$(date +%Y%m%d-%H%M%S)" || true
+
+          scp $OPT compose/docker-compose.yml "$TARGET:$DEPLOY_PATH/docker/docker-compose.yml"
+          ssh $OPT "$TARGET" "mkdir -p $DEPLOY_PATH/scripts"
+          scp $OPT scripts/*.sh "$TARGET:$DEPLOY_PATH/scripts/"
+
+      - name: .env 仅首次种入（已存在则跳过，永不覆盖）
+        env:
+          HOST: ${{ vars.DEPLOY_HOST }}
+          USER: ${{ vars.DEPLOY_USER || 'root' }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            "$USER@$HOST" "ENV_FILE=$DEPLOY_PATH/backend/.env bash $DEPLOY_PATH/scripts/seed-env.sh"
+
+      - name: 重建容器
+        env:
+          HOST: ${{ vars.DEPLOY_HOST }}
+          USER: ${{ vars.DEPLOY_USER || 'root' }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            "$USER@$HOST" "cd $DEPLOY_PATH/docker && docker compose up -d"
+
+      - name: 应用 nginx（仅勾选 apply_nginx 时；test 后 reload，绝不停服）
+        if: ${{ inputs.apply_nginx == true }}
+        env:
+          HOST: ${{ vars.DEPLOY_HOST }}
+          USER: ${{ vars.DEPLOY_USER || 'root' }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            "$USER@$HOST" "cp $DEPLOY_PATH/docker/nginx.conf /etc/nginx/nginx.conf.new \
+             && nginx -t -c /etc/nginx/nginx.conf.new \
+             && mv /etc/nginx/nginx.conf.new /etc/nginx/nginx.conf \
+             && systemctl reload nginx && echo nginx-reloaded"
+
+      - name: 健康门禁（退出码即结论）
+        env:
+          HOST: ${{ vars.DEPLOY_HOST }}
+          USER: ${{ vars.DEPLOY_USER || 'root' }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            "$USER@$HOST" "bash $DEPLOY_PATH/scripts/healthcheck.sh"
