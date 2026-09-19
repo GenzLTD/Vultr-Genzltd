@@ -152,6 +152,24 @@ class TestGfccIsUniqueProtocolSource:
         assert "backend" not in rel.parts, "管线契约不得放进 backend/"
 
 
+class TestOverseasDataPlane:
+    """钱和海外管理号以 Vultr 为准；整库不是对齐面。"""
+
+    DOC = REPO_ROOT / "docs" / "looma-overseas" / "DATA-PLANE.md"
+
+    def test_data_plane_doc_exists(self):
+        assert self.DOC.is_file(), "缺少海外数据面对账册"
+
+    def test_vultr_is_payment_write_authority(self):
+        text = self.DOC.read_text(encoding="utf-8")
+        assert "Stripe 订单" in text
+        assert "Vultr" in text
+        assert "禁止" in text
+        assert "覆盖" in text
+        assert "zervi@genz.ltd" in text
+        assert "DEPLOY_ENABLED" in text
+
+
 if __name__ == "__main__":
     import sys
 

@@ -18,6 +18,7 @@
 | 账本 | 管什么 | 放哪 |
 |---|---|---|
 | **本册** | 境内产品运行时 vs 海外产品运行时 | `docs/looma-overseas/` |
+| **海外数据面** | 谁写订单、谁是管理号、库能不能互拷 | [`DATA-PLANE.md`](DATA-PLANE.md) |
 | **本仓 vs 海外现网** | Vultr 机 `/opt/looma-zervi` 还没收到仓内期望态 | [`../DIFF-vs-live.md`](../DIFF-vs-live.md) |
 | **境内机 vs 境内机** | 腾讯云 `1.14.202.161` vs 天翼云 `14.29.216.219`（compose 孤本、明文密钥、端口裸奔、CHROMA remote/local……） | **不进本册**。等境内仓（szbolent-cn 式）立起来后放那边 |
 
@@ -44,6 +45,7 @@
 | P9 | compose 入 git、真值不入库；非密钥 `set_kv`、密钥 `seed_kv` | **要** | 本仓 `bootstrap-env.sh` + P5；dryrun 用 `.env.example` 桩 | 有钉（海外仓）。境内两机取样见下表，**收敛方案不在本册** |
 | P10 | 发版管线不合成一条 | 分叉 | 境内 `TestOverseasWorkflowContract::test_deploy_overseas_workflow_is_retired` 守缺席（`9751945`）：`deploy-overseas.yml` 复活即红；海外侧纪律靠本册 + 不向 looma 开海外 PR | 有钉（境内守缺席，2026-09-19 补） |
 | P11 | JWT `iss` / 品牌包名 | 分叉（白标待做） | 无钉 | **无钉，待补** |
+| P12 | 支付写权威 = Vultr `looma.db`；禁止整库互拷 | 分叉（钱只在海外） | 本仓 `TestOverseasDataPlane` + [`DATA-PLANE.md`](DATA-PLANE.md) | 有钉 |
 
 CI 覆盖：`backend-test` 先 `assert-contracts.sh`（P1）再 `dryrun.sh --static`（P5–P9），再 `backend/tests`（P4）。
 
@@ -72,7 +74,7 @@ CI 覆盖：`backend-test` 先 `assert-contracts.sh`（P1）再 `dryrun.sh --sta
 
 | 形态 | Vultr-Genzltd **仓 / dryrun** | Vultr **现网** `139.180.184.25` | 腾讯云取样 `1.14.202.161` | 天翼云取样 `14.29.216.219` |
 |---|---|---|---|---|
-| 端口 | 只发 `127.0.0.1:5200`（dryrun 第 5 步钉死） | 仍 `0.0.0.0:5200/8000/6379`（2026-09-19 实测） | 三端口公网裸奔 + redis 无密码 | backend `127.0.0.1:5203`，chroma/redis 不发布 |
+| 端口 | 只发 `127.0.0.1:5200`（dryrun 第 5 步钉死） | compose 仍 `0.0.0.0`；**2026-09-19 已 `DOCKER-USER` 封公网 5200/6379/8000** | 三端口公网裸奔 + redis 无密码 | backend `127.0.0.1:5203`，chroma/redis 不发布 |
 | 密钥 | compose 无真值；`seed_kv` / `set_kv`（P5 P9） | 历史 `.env`；旧 `overseas-*` 仍可能 `set_kv` 打回 | CI 生成 `.env`，12 键最小集 | 50+ 键内联进机上孤本 compose，含密钥明文 |
 | compose 真源 | 本仓 `compose/docker-compose.yml` | 仍吃 `/opt/looma-zervi/docker/…` | 仓内标准 `docker/docker-compose.yml` | 机上孤本 `docker-compose.tianyi.full.yml`，不在 git |
 | 代码投递 | 期望：本仓 rsync → `STACK_DIR`；镜像 hash 决定是否 build | 旧通道 rsync + bind mount；`DEPLOY_ENABLED` 关 | rsync → 镜像内 `build` | rsync → bind mount `--no-build` |
@@ -107,4 +109,5 @@ CI 覆盖：`backend-test` 先 `assert-contracts.sh`（P1）再 `dryrun.sh --sta
 | 2026-09-19 | 钉 | 同号规则 P1–P11；P2/P3/P10/P11 待补 |
 | 2026-09-19 | 核数 | heads/tag 定为 **21/70**（`gh api` 权威）。此前 10/68 系 THOMAS 克隆 `origin` 实为 Gitee 镜像 `szbenyx/looma-zervi` 的滞后视图；本机 `branch -r` 33 为未 prune 残留。清账名单以 GitHub 真源 21 条为准 |
 | 2026-09-19 | P1 执行 | 境内 Owner：`deploy-overseas.yml` 删除（`785c2a7`）、`release/overseas` 分支删除（heads 21→20）、`TestOverseasWorkflowContract` 改守缺席（`9751945`，P10 由无钉转有钉）；归档 tag 验证指向 `1323c84` 含全部超前提交。`rotate-overseas-stripe.yml`（手动触发、只 set_kv webhook secret、不 rsync）未动，待海外侧拍板 |
+| 2026-09-19 | 数据面 | 海外 Owner 只读对账：5 真人 UUID 同号；beta 多种子；`zervi` 与 pending `$1.99` 只在 Vultr；现网库哈希=快照。见 [`DATA-PLANE.md`](DATA-PLANE.md) |
 | 2026-09-19 | P0 执行 | 腾讯 `DOCKER-USER` 封公网入站：实勘口径 3 口之外另发现 `ollama:11434`、`pgvector:5433` 同裸，共封 **5200/6379/8000/11434/5433**；nginx 80 反代（`127.0.0.1:5200`）与容器间网络不受影响，外网验证三口超时、`/health` 200。redis 无密码的根因（compose 绑 `0.0.0.0`）未治，属 looma-cn P4；**持久化**：systemd unit `block-docker-ports.service`（After=docker.service、RemainAfterExit=yes）已写入 `/etc/systemd/system/`、`enabled` + `active`，ExecStart `-C \|\| -I` 幂等已实测（删规则后 `systemctl start` 自愈插回）。时序注记：`785c2a7` 因旧测试引用已删文件 CI 一过性红（部署 job 全 skip、机器未动），`9751945` 全绿后腾讯/天翼双端部署成功，两机 `git_commit` = `9751945` 闭合 |
