@@ -2,7 +2,7 @@
  * Pricing Page — 套餐对比 + 支付（Stub / WeChat Pay）
  */
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   BRAND_SAAS,
   createAuthApi,
@@ -100,10 +100,12 @@ function formatPrice(plan: PaymentPlan): string {
 }
 
 export default function Pricing() {
-  const { isAuthenticated, token, applySessionToken, fetchProfile } = useSaasAuthStore();
+  const { isAuthenticated, token, user, applySessionToken, fetchProfile } = useSaasAuthStore();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [plans, setPlans] = useState<PlanCard[]>([]);
-  const [stubMode, setStubMode] = useState(true);
+  // plans 接口故意不返回 stub_mode；默认 false，避免关 Stub 后仍走 /upgrade。
+  const [stubMode, setStubMode] = useState(false);
   const [loadingPlans, setLoadingPlans] = useState(true);
   const [upgradingTier, setUpgradingTier] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -128,17 +130,22 @@ export default function Pricing() {
     (async () => {
       try {
         const client = createSaasApiClient();
-        const resp = await createPaymentApi(client).plans(BILLING_REGION);
+        const api = createPaymentApi(client);
+        const [plansResp, providersResp] = await Promise.all([
+          api.plans(BILLING_REGION),
+          api.providers(BILLING_REGION),
+        ]);
         if (cancelled) return;
-        const cards: PlanCard[] = resp.plans.map((plan) => ({
+        const cards: PlanCard[] = plansResp.plans.map((plan) => ({
           ...plan,
           ...PLAN_META[plan.tier],
         }));
         setPlans(IS_OVERSEAS ? cards : [...cards, ENTERPRISE_CARD]);
-        setStubMode(resp.stub_mode ?? true);
+        setStubMode(providersResp.stub_mode);
       } catch {
         if (!cancelled) {
           setMessage("无法加载套餐价格，请稍后重试");
+          setStubMode(false);
         }
       } finally {
         if (!cancelled) {
@@ -150,6 +157,51 @@ export default function Pricing() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    const outcome = searchParams.get("status");
+    if (outcome !== "success" && outcome !== "cancel") return;
+    if (!token) return;
+
+    if (outcome === "cancel") {
+      setMessage(IS_OVERSEAS ? "Checkout cancelled." : "已取消支付");
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const client = createSaasApiClient();
+        const status = await createPaymentApi(client).status();
+        await fetchProfile();
+        if (cancelled) return;
+        if (status.tier !== "free" && status.status !== "inactive") {
+          setMessage(
+            IS_OVERSEAS
+              ? `Activated ${status.plan.name}.`
+              : `已开通 ${status.plan.name}！`,
+          );
+        } else {
+          setMessage(
+            IS_OVERSEAS
+              ? "Payment received. Refresh if your plan has not updated yet."
+              : "已返回，档位更新可能稍有延迟，请刷新页面。",
+          );
+        }
+      } catch {
+        if (!cancelled) {
+          setMessage(
+            IS_OVERSEAS
+              ? "Could not refresh plan status. Please reload."
+              : "无法刷新套餐状态，请刷新页面。",
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams, token, fetchProfile]);
 
   const handleUpgrade = async (tier: "supporter" | "pro") => {
     if (!isAuthenticated || !token) {
@@ -340,7 +392,18 @@ export default function Pricing() {
                 ))}
               </ul>
 
-              {plan.upgradable ? (
+              {plan.tier === user?.tier ? (
+                <button
+                  disabled
+                  className="w-full py-2.5 text-sm rounded-lg font-medium cursor-not-allowed opacity-50"
+                  style={{
+                    backgroundColor: "var(--color-bg-surface)",
+                    color: "var(--color-text-secondary)",
+                  }}
+                >
+                  {IS_OVERSEAS ? "Current plan" : "当前方案"}
+                </button>
+              ) : plan.upgradable ? (
                 <button
                   onClick={() => void handleUpgrade(plan.tier as "supporter" | "pro")}
                   disabled={upgradingTier !== null}

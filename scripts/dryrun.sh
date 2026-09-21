@@ -52,6 +52,64 @@ runpy() {
   if [ "$PY" = py ]; then py -3 "$@"; else "$PY" "$@"; fi
 }
 
+# ServBay Git sh 没有 sleep/nc；运行时探针用 python 兜底，避免 Windows 干跑假红。
+wait_sec() {
+  n="${1:-1}"
+  if command -v sleep >/dev/null 2>&1; then
+    sleep "$n"
+  else
+    runpy -c "import time,sys; time.sleep(float(sys.argv[1]))" "$n"
+  fi
+}
+
+tcp_open() {
+  host="$1"
+  port="$2"
+  if command -v nc >/dev/null 2>&1; then
+    nc -z -w 2 "$host" "$port" >/dev/null 2>&1
+    return $?
+  fi
+  runpy - "$host" "$port" <<'PY'
+import socket, sys
+s = socket.socket()
+s.settimeout(2)
+try:
+    s.connect((sys.argv[1], int(sys.argv[2])))
+except OSError:
+    sys.exit(1)
+finally:
+    s.close()
+PY
+}
+
+lan_ipv4() {
+  if command -v ip >/dev/null 2>&1; then
+    ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}'
+    return
+  fi
+  if command -v hostname >/dev/null 2>&1; then
+    out="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    if [ -n "$out" ]; then printf '%s\n' "$out"; return; fi
+  fi
+  if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+    ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true
+    return
+  fi
+  runpy - <<'PY'
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+try:
+    s.connect(("1.1.1.1", 80))
+    ip = s.getsockname()[0]
+    if ip and ip != "127.0.0.1":
+        print(ip)
+except OSError:
+    pass
+finally:
+    s.close()
+PY
+}
+
 fail=0
 ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 no()  { printf '  \033[31m✗\033[0m %s\n' "$1"; fail=1; }
@@ -269,29 +327,20 @@ else
   docker rm -f vultr-genzltd-dryrun-probe >/dev/null 2>&1 || true
   if docker run -d --name vultr-genzltd-dryrun-probe --entrypoint sleep \
        -p "127.0.0.1:$PROBE_PORT:80" "$img" 20 >/dev/null 2>&1; then
-    sleep 1
+    wait_sec 1
     bound="$(docker port vultr-genzltd-dryrun-probe 80/tcp 2>/dev/null | head -1)"
     case "$bound" in
       127.0.0.1:*) ok "docker 实际绑定 = $bound" ;;
       *)           no "docker 实际绑定异常 = ${bound:-（空）}" ;;
     esac
-    if nc -z -w 2 127.0.0.1 "$PROBE_PORT" >/dev/null 2>&1; then
+    if tcp_open 127.0.0.1 "$PROBE_PORT"; then
       ok "回环可达（127.0.0.1:${PROBE_PORT}）"
     else
       no "回环不可达（127.0.0.1:${PROBE_PORT}）"
     fi
-    lanip=""
-    if command -v ip >/dev/null 2>&1; then
-      lanip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
-    fi
-    if [ -z "$lanip" ] && command -v hostname >/dev/null 2>&1; then
-      lanip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-    fi
-    if [ -z "$lanip" ] && [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
-      lanip="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
-    fi
+    lanip="$(lan_ipv4)"
     if [ -n "$lanip" ] && [ "$lanip" != "127.0.0.1" ]; then
-      if nc -z -w 2 "$lanip" "$PROBE_PORT" >/dev/null 2>&1; then
+      if tcp_open "$lanip" "$PROBE_PORT"; then
         no "局域网可达（$lanip:${PROBE_PORT}）——收内网未生效"
       else
         ok "局域网不可达（$lanip:${PROBE_PORT}）——收内网生效"

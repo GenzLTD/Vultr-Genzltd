@@ -1,4 +1,5 @@
 # 仅本机 ServBay 演示：少 worker + 国内镜像构建。不用于真机。
+# DEPLOY_REGION 钉 SG（与 compose 默认一致；防宿主空变量回落到旧 US 兜底）。
 services:
   backend:
     build:
@@ -7,6 +8,8 @@ services:
       args:
         USE_CN_MIRROR: "1"
         PIP_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple/"
+    environment:
+      - DEPLOY_REGION=SG
     command:
       - gunicorn
       - --bind

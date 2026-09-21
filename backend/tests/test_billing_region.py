@@ -134,6 +134,22 @@ class TestCheckoutRequestCarriesRegion:
         )
         assert "BILLING_REGION" in block, "region should come from BILLING_REGION, not a hardcoded string"
 
+    def test_pricing_reads_stub_mode_from_providers_not_plans(self):
+        """plans 故意不含 stub_mode；?? true 会让关 Stub 后仍走 /upgrade。"""
+        text = PRICING_TSX.read_text(encoding="utf-8")
+        assert "api.providers(" in text or "createPaymentApi(client).providers(" in text
+        assert "providersResp.stub_mode" in text or "providers(" in text
+        assert "resp.stub_mode ?? true" not in text
+        assert "plansResp.stub_mode" not in text
+
+    def test_pricing_refreshes_on_stripe_success_return(self):
+        text = PRICING_TSX.read_text(encoding="utf-8")
+        assert 'searchParams.get("status")' in text
+        assert 'outcome !== "success"' in text
+        assert 'outcome === "cancel"' in text
+        assert ".status()" in text
+        assert "fetchProfile()" in text
+
 
 class TestCheckoutHonoursRegionSentInBody:
     """The SDK posts CheckoutRequest as JSON — that region must be honoured.

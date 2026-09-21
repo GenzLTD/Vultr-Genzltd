@@ -36,7 +36,8 @@ services:
       - AIRWALLEX_MODE=${AIRWALLEX_MODE:-demo}
       - AIRWALLEX_WEBHOOK_SECRET=${AIRWALLEX_WEBHOOK_SECRET:-}
       - RATE_LIMIT_STORAGE_URI=${RATE_LIMIT_STORAGE_URI:-memory://}
-      - DEPLOY_REGION=${DEPLOY_REGION:-US}
+      # 海外仓默认 SG。:-US 会在宿主未导出时盖掉 backend/.env 的 SG。
+      - DEPLOY_REGION=${DEPLOY_REGION:-SG}
       # QCC (企查查官方 MCP；2026-08-27 迁入 base，防 full.yml 重新生成丢配置。
       # 注意：compose environment 优先于 backend/.env，重新生成 full.yml 前
       # 必须确保插值源（docker/.env 或 shell）已配 QCC_ENABLED=true + QCC_AUTH_TOKEN)
