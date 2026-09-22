@@ -379,3 +379,193 @@ def test_suffix_whitelist_matches_manager_constant():
     assert "@test.local" in TEST_EMAIL_SUFFIXES
     assert "@gmail.com" not in TEST_EMAIL_SUFFIXES
     assert all(s.startswith("@") for s in TEST_EMAIL_SUFFIXES)
+
+
+def _seed_order(db, uid, out_trade_no, status="pending", amount=0.0, currency="USD"):
+    with db.get_conn() as conn:
+        conn.execute(
+            "INSERT INTO orders (id, user_id, plan_id, tier, amount, currency,"
+            " out_trade_no, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("order-" + out_trade_no, uid, "supporter_monthly_us", "supporter", amount,
+             currency, out_trade_no, status),
+        )
+
+
+def _rows_list(db, sql):
+    with db.get_conn() as conn:
+        return conn.execute(sql).fetchall()
+
+
+def test_delete_user_blocked_by_paid_order(db):
+    from src.db.manager import PaidOrderBlockedError
+
+    uid = db.create_user(email="paid-user@test.local")
+    _seed_children(db, uid, tag="paid")
+    _seed_order(db, uid, "LOOMA-PAID-001", status="paid", amount=1.99)
+
+    with pytest.raises(PaidOrderBlockedError) as excinfo:
+        db.delete_user(uid)
+
+    assert excinfo.value.orders[0]["out_trade_no"] == "LOOMA-PAID-001"
+    assert db.get_user_by_id(uid) is not None
+    assert _rows(db, "SELECT COUNT(*) FROM orders WHERE user_id = ?", (uid,)) == 1
+
+
+def test_refunded_order_also_blocks(db):
+    from src.db.manager import PaidOrderBlockedError
+
+    uid = db.create_user(email="refunded@test.local")
+    _seed_order(db, uid, "LOOMA-REFUND-001", status="refunded", amount=1.99)
+
+    with pytest.raises(PaidOrderBlockedError):
+        db.delete_user(uid)
+    assert db.get_user_by_id(uid) is not None
+
+
+def test_pending_orders_do_not_block(db):
+    uid = db.create_user(email="pending-only@test.local")
+    _seed_children(db, uid, tag="po")
+    _seed_order(db, uid, "LOOMA-PENDING-001", status="pending", amount=1.99)
+    _seed_order(db, uid, "LOOMA-EXPIRED-001", status="expired", amount=1.99)
+
+    result = db.delete_user(uid)
+
+    assert db.get_user_by_id(uid) is None
+    assert result["deleted"]["orders"] == 2
+
+
+def test_list_paid_orders_returns_full_detail(db):
+    uid = db.create_user(email="detail@test.local")
+    _seed_order(db, uid, "LOOMA-PAID-002", status="paid", amount=1.99, currency="USD")
+    with db.get_conn() as conn:
+        conn.execute(
+            "UPDATE orders SET paid_at = '2026-09-19T00:00:00'"
+            " WHERE out_trade_no = 'LOOMA-PAID-002'"
+        )
+
+    orders = db.list_paid_orders(uid)
+
+    assert len(orders) == 1
+    o = orders[0]
+    assert o["out_trade_no"] == "LOOMA-PAID-002"
+    assert o["amount"] == 1.99
+    assert o["currency"] == "USD"
+    assert o["status"] == "paid"
+    assert o["paid_at"] == "2026-09-19T00:00:00"
+
+
+def test_purge_dry_run_reports_paid_breakdown(app_db, client):
+    db = app_db
+    blocked = db.create_user(email="paid-target@test.local")
+    _seed_order(db, blocked, "LOOMA-DRY-PAID-1", status="paid", amount=1.99)
+    db.create_user(email="free-target@test.local")
+    token = _register_admin(client, db)
+
+    resp = client.post(
+        "/v1/admin/test-accounts/purge", headers=_auth_headers(token), json={"dry_run": True}
+    )
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["matched"] == 2
+    assert body["eligible"] == 1
+    assert body["blocked_by_paid"] == 1
+    assert body["blocked_details"][0]["email"] == "paid-target@test.local"
+    assert db.get_user_by_id(blocked) is not None
+
+
+def test_purge_blocks_users_with_paid_orders(app_db, client):
+    db = app_db
+    blocked = db.create_user(email="paid-run@test.local")
+    _seed_children(db, blocked, tag="pr")
+    _seed_order(db, blocked, "LOOMA-RUN-PAID-1", status="paid", amount=1.99)
+    victim = db.create_user(email="clean-run@test.local")
+    _seed_children(db, victim, tag="cr")
+    token = _register_admin(client, db)
+
+    resp = client.post(
+        "/v1/admin/test-accounts/purge", headers=_auth_headers(token), json={}
+    )
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["purged"] == 1
+    assert body["blocked_by_paid"] == 1
+    assert db.get_user_by_id(blocked) is not None
+    assert _rows(db, "SELECT COUNT(*) FROM orders WHERE user_id = ?", (blocked,)) == 1
+    assert db.get_user_by_id(victim) is None
+
+
+def test_purge_test_orders_requires_prefix(app_db, client):
+    token = _register_admin(client, app_db)
+    resp = client.post(
+        "/v1/admin/test-orders/purge", headers=_auth_headers(token), json={}
+    )
+    assert resp.status_code == 400
+    assert "prefixes" in resp.get_json()["message"]
+
+
+def test_purge_test_orders_rejects_paid_status(app_db, client):
+    token = _register_admin(client, app_db)
+    resp = client.post(
+        "/v1/admin/test-orders/purge",
+        headers=_auth_headers(token),
+        json={"prefixes": ["LOOMA-WIN-"], "statuses": ["paid"]},
+    )
+    assert resp.status_code == 400
+    assert "paid" in resp.get_json()["message"]
+
+
+def test_purge_test_orders_by_prefix(app_db, client):
+    db = app_db
+    uid = db.create_user(email="order-owner@test.local")
+    _seed_order(db, uid, "LOOMA-WIN-NOORDER-1", status="pending", amount=0)
+    _seed_order(db, uid, "LOOMA-WIN-PAID-1", status="paid", amount=1.99)
+    _seed_order(db, uid, "OTHER-PREFIX-1", status="pending", amount=0)
+    token = _register_admin(client, db)
+
+    resp = client.post(
+        "/v1/admin/test-orders/purge",
+        headers=_auth_headers(token),
+        json={"prefixes": ["LOOMA-WIN-"], "dry_run": True},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["matched"] == 1
+    assert body["deleted"] == 0
+    assert body["skipped_non_purgeable"] == 1
+    assert _rows(db, "SELECT COUNT(*) FROM orders") == 3
+
+    resp = client.post(
+        "/v1/admin/test-orders/purge",
+        headers=_auth_headers(token),
+        json={"prefixes": ["LOOMA-WIN-"]},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["matched"] == 1
+    assert body["deleted"] == 1
+    remaining = {r[0] for r in _rows_list(db, "SELECT out_trade_no FROM orders")}
+    assert remaining == {"LOOMA-WIN-PAID-1", "OTHER-PREFIX-1"}
+    assert db.get_user_by_id(uid) is not None
+
+
+def test_purge_test_orders_zero_amount_only(app_db, client):
+    db = app_db
+    uid = db.create_user(email="zero@test.local")
+    _seed_order(db, uid, "LOOMA-Z-1", status="pending", amount=0)
+    _seed_order(db, uid, "LOOMA-Z-2", status="pending", amount=1.99)
+    token = _register_admin(client, db)
+
+    resp = client.post(
+        "/v1/admin/test-orders/purge",
+        headers=_auth_headers(token),
+        json={"prefixes": ["LOOMA-Z-"], "zero_amount_only": True},
+    )
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["matched"] == 1
+    assert body["deleted"] == 1
+    remaining = {r[0] for r in _rows_list(db, "SELECT out_trade_no FROM orders")}
+    assert remaining == {"LOOMA-Z-2"}

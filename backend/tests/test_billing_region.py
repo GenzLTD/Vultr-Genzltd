@@ -138,7 +138,8 @@ class TestCheckoutRequestCarriesRegion:
         """plans 故意不含 stub_mode；?? true 会让关 Stub 后仍走 /upgrade。"""
         text = PRICING_TSX.read_text(encoding="utf-8")
         assert "api.providers(" in text or "createPaymentApi(client).providers(" in text
-        assert "providersResp.stub_mode" in text or "providers(" in text
+        assert ".catch(() => null)" in text
+        assert "providersResp?.stub_mode === true" in text
         assert "resp.stub_mode ?? true" not in text
         assert "plansResp.stub_mode" not in text
 

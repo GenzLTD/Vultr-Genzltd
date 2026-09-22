@@ -133,7 +133,8 @@ export default function Pricing() {
         const api = createPaymentApi(client);
         const [plansResp, providersResp] = await Promise.all([
           api.plans(BILLING_REGION),
-          api.providers(BILLING_REGION),
+          // providers 单独失败不拦套餐；缺省 false，宁可 Checkout 报错也不误报 Stub。
+          api.providers(BILLING_REGION).catch(() => null),
         ]);
         if (cancelled) return;
         const cards: PlanCard[] = plansResp.plans.map((plan) => ({
@@ -141,7 +142,7 @@ export default function Pricing() {
           ...PLAN_META[plan.tier],
         }));
         setPlans(IS_OVERSEAS ? cards : [...cards, ENTERPRISE_CARD]);
-        setStubMode(providersResp.stub_mode);
+        setStubMode(providersResp?.stub_mode === true);
       } catch {
         if (!cancelled) {
           setMessage("无法加载套餐价格，请稍后重试");

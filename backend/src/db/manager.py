@@ -1064,6 +1064,24 @@ NON_FK_USER_TABLES = (
     ("audit_logs", "actor", True),   # 审计轨迹默认保留，include_audit=True 时才清
 )
 
+PAID_ORDER_STATUSES = ("paid", "refunded")
+
+# purge_test_orders 允许清理的订单状态白名单默认值（绝不含 PAID_ORDER_STATUSES）。
+PURGEABLE_ORDER_STATUSES = ("pending", "expired")
+
+
+class PaidOrderBlockedError(Exception):
+    """用户存在已支付/已退款订单，删除被资金安全护栏拒绝。"""
+
+    def __init__(self, user_id: str, orders: list):
+        self.user_id = user_id
+        self.orders = orders
+        preview = ", ".join(o["out_trade_no"] for o in orders[:5])
+        super().__init__(
+            "refusing to delete user %s: %d order(s) with real payment history (%s)"
+            " — clear/refund those orders first" % (user_id, len(orders), preview)
+        )
+
 
 class DatabaseManager:
     """Thread-safe SQLite manager with WAL mode.
@@ -2850,8 +2868,21 @@ class DatabaseManager:
                 created.append(user_id)
         return created
 
+    def list_paid_orders(self, user_id: str) -> list:
+        """列出用户有真实资金流水痕迹的订单（paid / refunded）。"""
+        with self.get_conn() as conn:
+            rows = conn.execute(
+                "SELECT id, out_trade_no, plan_id, tier, amount, currency, status, paid_at"
+                " FROM orders WHERE user_id = ? AND status IN (?, ?)",
+                (user_id, *PAID_ORDER_STATUSES),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def delete_user(self, user_id: str, include_audit: bool = False) -> dict:
         """删除用户及其全部依赖行，返回 ``{"user_id":..., "deleted": {table: n}}``。
+
+        资金安全护栏：存在任一 paid / refunded 订单时抛 PaidOrderBlockedError，
+        用户与依赖行全不动。要清这类账号，先走 purge_test_orders（或退款）。
 
         为什么不能直接 ``DELETE FROM users``：
           库内 34 张表以裸外键引用 users(id)，没有任何 ``ON DELETE CASCADE``，
@@ -2866,6 +2897,10 @@ class DatabaseManager:
 
         ``include_audit=False``（默认）保留 audit_logs 中的审计轨迹。
         """
+        paid_orders = self.list_paid_orders(user_id)
+        if paid_orders:
+            raise PaidOrderBlockedError(user_id, paid_orders)
+
         with self.get_conn() as conn:
             tabs = [
                 r[0] for r in conn.execute(
@@ -2960,6 +2995,70 @@ class DatabaseManager:
                     deleted[table] = deleted.get(table, 0) + cur.rowcount
 
             return {"user_id": user_id, "deleted": deleted}
+
+    def purge_test_orders(
+        self,
+        prefixes,
+        statuses=None,
+        zero_amount_only: bool = False,
+        dry_run: bool = False,
+    ) -> dict:
+        """按订单维度清理测试订单（不触碰 users 及其他表）。
+
+        paid / refunded 不允许进入状态白名单，与 delete_user 护栏互为犄角。
+        """
+        if not prefixes:
+            raise ValueError("prefixes 必填——按订单清理不允许无前缀全表扫")
+        prefixes = [str(p) for p in prefixes if str(p).strip()]
+        if not prefixes:
+            raise ValueError("prefixes 不能全为空串")
+
+        statuses = tuple(statuses) if statuses else PURGEABLE_ORDER_STATUSES
+        bad = set(statuses) & set(PAID_ORDER_STATUSES)
+        if bad:
+            raise ValueError(
+                "paid/refunded 订单不允许按订单清理（状态命中: %s）" % sorted(bad)
+            )
+
+        where = ["out_trade_no LIKE ?"] * len(prefixes)
+        params = [p + "%" for p in prefixes]
+        where.append("status IN (%s)" % ",".join("?" * len(statuses)))
+        params.extend(statuses)
+        if zero_amount_only:
+            where.append("amount = 0")
+        sql_where = " AND ".join("(%s)" % w for w in where)
+
+        with self.get_conn() as conn:
+            matched = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT id, user_id, out_trade_no, plan_id, tier, amount, currency,"
+                    " status, created_at FROM orders WHERE %s" % sql_where,
+                    params,
+                ).fetchall()
+            ]
+            any_prefix_sql = " OR ".join("out_trade_no LIKE ?" for _ in prefixes)
+            total_prefixed = conn.execute(
+                "SELECT COUNT(*) FROM orders WHERE (%s)" % any_prefix_sql,
+                [p + "%" for p in prefixes],
+            ).fetchone()[0]
+            skipped_non_purgeable = total_prefixed - len(matched)
+
+            if dry_run or not matched:
+                deleted = 0
+            else:
+                deleted = conn.execute(
+                    "DELETE FROM orders WHERE id IN (%s)"
+                    % ",".join("?" * len(matched)),
+                    [o["id"] for o in matched],
+                ).rowcount
+
+        return {
+            "matched": len(matched),
+            "deleted": deleted,
+            "orders": matched[:100],
+            "skipped_non_purgeable": max(skipped_non_purgeable, 0),
+        }
 
     def rate_query(self, query_id: int, rating: int):
         """Rate a query (1-5)."""
