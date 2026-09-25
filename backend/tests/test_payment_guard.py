@@ -77,15 +77,17 @@ class TestStubGuard:
             assert resp.status_code == 402
             assert resp.get_json()["error"] == "payment_required"
 
-    def test_wechat_order_blocked_in_stub_mode(self, client):
+    def test_wechat_order_in_stub_mode_returns_simulated_order(self, client):
         token = _register(client, "wx_stub@test.com")
         resp = client.post(
             "/v1/payment/wechat/order",
             json={"tier": "supporter", "trade_type": "NATIVE"},
             headers=_auth_headers(token),
         )
-        assert resp.status_code == 400
-        assert resp.get_json()["error"] == "stub_mode"
+        assert resp.status_code == 201
+        body = resp.get_json()
+        assert body["stub_mode"] is True
+        assert body["qr_code_url"].startswith("weixin://wxpay/stub/")
 
     def test_wechat_order_needs_credentials(self):
         os.environ.pop("WECHAT_MCHID", None)

@@ -14,7 +14,8 @@ Endpoints:
   POST /v1/payment/stripe/webhook    - [DEPRECATED] Alias for unified webhook (backward compat)
 
 Pricing contract: backend/contracts/payment.v1.json
-  CN supporter: ¥9.9/mo · US supporter: $1.99/mo
+  双主体：CN=深伯乐诗词 supporter ¥29/mo · pro ¥99/mo（本栈不售微信）
+  US=YeDall 求职订阅 supporter $1.99/mo · pro $5.99/mo（本栈 Stripe）
 
 For production, set PAYMENT_STUB_MODE=false and configure payment credentials.
 """
@@ -210,23 +211,27 @@ def upgrade_tier():
         ), 400
 
     db = current_app._db
-    db.update_user_tier(g.user_id, new_tier)
-
-    # 创建 Stub 订单记录（审计用）
     region = resolve_region(
         request.args.get("region") or data.get("region"),
         request.headers.get("Accept-Language"),
     )
     plan = get_plan_for_tier(new_tier, region)
+
+    # Stub 也走与微信/Stripe 回调相同的核销链：
+    #   建单(pending) → mark_order_paid → update_user_tier → upsert_subscription(+30天)
+    out_trade_no = generate_out_trade_no()
     db.create_order(
         user_id=g.user_id,
         plan_id=plan["plan_id"],
         tier=new_tier,
         amount=plan["price_monthly"],
         currency=plan["currency"],
-        out_trade_no=generate_out_trade_no(),
+        out_trade_no=out_trade_no,
         metadata_json={"mode": "stub", "region": region},
     )
+    paid_order = _process_payment_completed(db, out_trade_no, f"STUB_{out_trade_no}", "stub")
+    if not paid_order:
+        return jsonify(error="internal", message="Stub settlement failed"), 500
 
     if new_tier == "pro":
         log_product_event(
@@ -274,15 +279,8 @@ def create_wechat_order():
     if blocked:
         return blocked
 
-    if _is_stub_mode():
-        return jsonify(
-            error="stub_mode",
-            message="Payment stub mode is enabled. Use POST /v1/payment/upgrade for instant tier change, or set PAYMENT_STUB_MODE=false to enable real payments.",
-        ), 400
-
-    # 区域闸门：微信支付只服务 CN 计费区。海外站（tspace.genz.ltd / region=US）
-    # 一律拒绝下单——即便海外环境被误填微信凭证，也不得在海外链路收微信款。
-    # 海外第一笔变现只走 US/Stripe；微信仍归企业 .com.cn 域。
+    # 区域闸门先于 stub：微信支付只服务 CN。海外站 region=US/SG 一律 403，
+    # stub 也不发模拟码。海外变现只走 US/Stripe。
     region = resolve_region(
         request.args.get("region"),
         request.headers.get("Accept-Language"),
@@ -298,13 +296,6 @@ def create_wechat_order():
     trade_type = data.get("trade_type", "NATIVE").upper()
     openid = data.get("openid", "")
 
-    # 方案 A：JSAPI 支付时若前端未传 openid，从用户 DB 自动填充
-    if trade_type == "JSAPI" and not openid:
-        db = current_app._db
-        user = db.get_user_by_id(g.user_id)
-        if user and user.get("wechat_openid"):
-            openid = user["wechat_openid"]
-
     if new_tier not in UPGRADABLE_TIERS:
         return jsonify(error="bad_request", message="Invalid tier. Choose: supporter, pro"), 400
 
@@ -315,20 +306,67 @@ def create_wechat_order():
             message=f"Cannot downgrade from {current_tier} to {new_tier}",
         ), 400
 
-    # JSAPI 必须有关联的 openid（已从 DB 自动填充，若仍为空则报错）
-    # 此检查须在凭证检查之前，否则用户会收到不准确的 503 错误
-    if trade_type == "JSAPI" and not openid:
-        return jsonify(
-            error="openid_required",
-            message="JSAPI payment requires a WeChat openid. Please ensure the user has logged in via WeChat miniprogram.",
-        ), 400
-
     try:
         plan = get_plan_for_tier(new_tier, region)
     except KeyError:
         return jsonify(
             error="bad_request",
             message=f"No {region} price configured for tier: {new_tier}",
+        ), 400
+
+    # Stub：仅 CN 计费区发模拟码。新加坡部署位到不了这里。
+    if _is_stub_mode():
+        db = current_app._db
+        out_trade_no = generate_out_trade_no()
+        stub_qr = f"weixin://wxpay/stub/{out_trade_no}"
+        order = db.create_order(
+            user_id=g.user_id,
+            plan_id=plan["plan_id"],
+            tier=new_tier,
+            amount=plan["price_monthly"],
+            currency=plan["currency"],
+            out_trade_no=out_trade_no,
+            prepay_id=f"stub_{out_trade_no}",
+            qr_code_url=stub_qr,
+            metadata_json={
+                "trade_type": trade_type,
+                "region": region,
+                "mode": "stub",
+            },
+        )
+        resp = {
+            "order_id": order["id"],
+            "out_trade_no": out_trade_no,
+            "prepay_id": f"stub_{out_trade_no}",
+            "qr_code_url": stub_qr,
+            "amount": plan["price_monthly"],
+            "currency": plan["currency"],
+            "tier": new_tier,
+            "stub_mode": True,
+        }
+        if trade_type == "JSAPI":
+            import time as _time
+            resp["jsapi_params"] = {
+                "appId": current_app.config.get("WECHAT_APPID", "") or "stub-appid",
+                "timeStamp": str(int(_time.time())),
+                "nonceStr": out_trade_no[-16:],
+                "package": f"prepay_id=stub_{out_trade_no}",
+                "signType": "RSA",
+                "paySign": "STUB_SIGNATURE",
+            }
+        return jsonify(**resp), 201
+
+    # 方案 A：JSAPI 支付时若前端未传 openid，从用户 DB 自动填充
+    if trade_type == "JSAPI" and not openid:
+        db = current_app._db
+        user = db.get_user_by_id(g.user_id)
+        if user and user.get("wechat_openid"):
+            openid = user["wechat_openid"]
+
+    if trade_type == "JSAPI" and not openid:
+        return jsonify(
+            error="openid_required",
+            message="JSAPI payment requires a WeChat openid. Please ensure the user has logged in via WeChat miniprogram.",
         ), 400
 
     # 从配置读取 WeChat Pay 凭证
@@ -488,6 +526,44 @@ def wechat_pay_notify():
 # ============================================================
 # Multi-provider unified routes (overseas)
 # ============================================================
+
+@payment_bp.route("/payment/wechat/notify-simulate", methods=["POST"])
+def wechat_pay_notify_simulate():
+    """模拟微信回调。仅 CN 部署位且 PAYMENT_STUB_MODE=true 可用。
+
+    新加坡部署位恒 403：海外不提供微信核销口，避免 stub 误开时把
+    pending 订单洗成 paid。
+    """
+    if is_overseas_billing_deploy() or not _is_stub_mode():
+        return jsonify(
+            error="forbidden",
+            message="notify-simulate is only available on a CN deploy with PAYMENT_STUB_MODE.",
+        ), 403
+
+    data = request.get_json(silent=True) or {}
+    out_trade_no = data.get("out_trade_no", "")
+    if not out_trade_no:
+        return jsonify(error="bad_request", message="out_trade_no is required"), 400
+
+    db = current_app._db
+    paid_order = _process_payment_completed(
+        db, out_trade_no, f"STUB_TXN_{out_trade_no}", "stub-notify"
+    )
+    if not paid_order:
+        return jsonify(
+            error="not_settled",
+            message="Order not found or already paid (idempotent skip).",
+        ), 409
+
+    return jsonify(
+        settled=True,
+        out_trade_no=out_trade_no,
+        tier=paid_order["tier"],
+        amount=paid_order["amount"],
+        currency=paid_order["currency"],
+        message="[STUB] Payment simulated. Subscription activated for 30 days.",
+    ), 200
+
 
 def _process_payment_completed(db, out_trade_no: str, transaction_id: str,
                                 provider_name: str) -> dict | None:

@@ -58,17 +58,17 @@ UPGRADE_HINT_GUEST_EXHAUSTED = {
     "upgrade_tiers": [
         {"tier": "free", "name": "免费版", "daily_quota": 30, "price_monthly": "免费",
          "features": ["每日30次AI问答", "5次职位匹配", "3次简历解析", "基础诗词推荐"]},
-        {"tier": "supporter", "name": "支持者版", "daily_quota": 99999, "price_monthly": "¥9.9/月·自愿赞助",
+        {"tier": "supporter", "name": "支持者版", "daily_quota": 99999, "price_monthly": "¥29/月·自愿赞助",
          "features": ["无限次AI问答", "无限职位匹配", "简历解析", "MBTI分析", "高级RAG"]},
     ],
 }
 
 UPGRADE_HINT_FREE_EXHAUSTED = {
     "reason": "free_quota_exhausted",
-    "message": "今日免费版配额已用尽。免费版每日30次对话，覆盖大部分真实求职场景。如需无限使用，9.9元/月支持我们。",
+    "message": "今日免费版配额已用尽。免费版每日30次对话，覆盖大部分真实求职场景。如需无限使用，29元/月支持我们。",
     "register_url": None,
     "upgrade_tiers": [
-        {"tier": "supporter", "name": "支持者版 · 去限制", "daily_quota": 99999, "price_monthly": "¥9.9/月",
+        {"tier": "supporter", "name": "支持者版 · 去限制", "daily_quota": 99999, "price_monthly": "¥29/月",
          "features": ["无限次AI问答", "无限职位匹配", "MBTI分析", "高级诗词RAG"]},
         {"tier": "enterprise", "name": "企业版", "daily_quota": 99999, "price_monthly": "联系销售",
          "features": ["无限AI问答", "私有云部署", "数据隔离", "专属支持"]},
@@ -80,7 +80,7 @@ UPGRADE_HINT_SCOPE_FORBIDDEN = {
     "message": "当前免费版仅支持公开知识库查询。升级支持者版可解锁私有文档上传和检索。",
     "register_url": None,
     "upgrade_tiers": [
-        {"tier": "supporter", "name": "支持者版", "daily_quota": 99999, "price_monthly": "¥9.9/月",
+        {"tier": "supporter", "name": "支持者版", "daily_quota": 99999, "price_monthly": "¥29/月",
          "features": ["私有文档上传", "文档管理", "高级检索"]},
     ],
 }

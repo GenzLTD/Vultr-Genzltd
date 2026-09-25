@@ -472,7 +472,7 @@ export default function Pricing() {
           <p className="text-xs mb-3" style={{ color: "var(--color-text-muted)" }}>
             {IS_OVERSEAS
               ? "Supporter $1.99/mo · Pro $5.99/mo · Billed in USD"
-              : "支持者 ¥9.9/月 · 专业版 ¥29.9/月 · 企业版请联系销售定制"}
+              : "支持者 ¥29/月 · 专业版 ¥99/月 · 企业版请联系销售定制"}
           </p>
           {!isAuthenticated && (
             <Link to="/register" className="text-sm" style={{ color: "var(--color-primary)" }}>
