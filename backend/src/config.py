@@ -335,3 +335,39 @@ def _refresh_config():
     Config.DEMOPPI_SIGNAL_INGEST_URL = os.getenv("DEMOPPI_SIGNAL_INGEST_URL", "")
     Config.GFCC_SIGNAL_INGEST_URL = os.getenv("GFCC_SIGNAL_INGEST_URL", "")
     Config.SIGNAL_INGEST_SECRET = os.getenv("SIGNAL_INGEST_SECRET", "")
+
+
+# ── 数据出境守卫（合规）────────────────────────────────────────────────────
+#
+# 海外站（DEPLOY_REGION != CN）不得把用户数据送往境内服务：
+#
+#   * 境内 LLM（DeepSeek）—— GDPR Art.44+ 的跨境传输需要 SCC + 传输影响评估；
+#     PIPL 侧也要求出境机制。核心风险：简历 / 聊天正文是高度敏感的个人数据。
+#   * 指向境内主机的**明文 HTTP** 端点 —— 未加密链路传输个人数据不可接受。
+#
+# 这里是「默认安全」：不改变业务语义，只在海外区剔除境内候选。
+# 境内区（含本地与 CI 的默认基线）行为完全不变。
+
+INLAND_LLM_PROVIDERS = frozenset({"deepseek"})
+
+_INLAND_REGION_CODES = frozenset({"CN", "CHINA", "CHN"})
+
+
+def is_overseas_deploy() -> bool:
+    """当前进程是否部署在海外区（非 CN）。"""
+    region = (os.getenv("DEPLOY_REGION") or "US").strip().upper()
+    return region not in _INLAND_REGION_CODES
+
+
+def safe_llm_provider_order(order: str | None) -> list[str]:
+    """返回按部署区域过滤后的 LLM 候选顺序（保持原顺序）。
+
+    海外区剔除境内 provider。若过滤后为空，**返回空列表**，而不是回退到
+    境内 provider —— 宁可让该功能降级，也不能悄悄把数据送出境。
+    """
+    providers = [p.strip().lower() for p in (order or "").split(",") if p.strip()]
+    if not providers:
+        providers = ["deepseek"]
+    if is_overseas_deploy():
+        return [p for p in providers if p not in INLAND_LLM_PROVIDERS]
+    return providers

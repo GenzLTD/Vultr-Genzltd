@@ -55,8 +55,43 @@ def _mcp_base_url() -> str:
     return (os.getenv("QCC_MCP_BASE_URL") or _DEFAULT_QCC_MCP_BASE).strip().rstrip("/")
 
 
+def qcc_disabled_reason() -> str | None:
+    """海外区禁用不合规的 QCC 端点；返回禁用原因，可用时返回 None。
+
+    判定只看一件事：**端点是不是明文 HTTP**。
+    海外部署下把用户数据送往未加密的链路是不可接受的；
+    境内部署（CN）沿用原有行为，不因本守卫改变。
+    """
+    base = _mcp_base_url()
+    if base.lower().startswith("https://"):
+        return None
+    try:
+        from src.config import is_overseas_deploy
+    except Exception:  # 配置模块不可用时宁可放行，避免把境内也误关
+        return None
+    if is_overseas_deploy():
+        return (
+            "overseas deploy refuses a plaintext HTTP QCC endpoint "
+            f"({base}); personal data must not transit an unencrypted link"
+        )
+    return None
+
+
+def is_qcc_enabled() -> bool:
+    """QCC 在当前部署区域是否可用。"""
+    return qcc_disabled_reason() is None
+
+
 def get_qcc_base_urls() -> dict[str, str]:
-    """Resolve per-service SSE stream URLs (honours QCC_MCP_BASE_URL)."""
+    """Resolve per-service SSE stream URLs (honours QCC_MCP_BASE_URL).
+
+    海外区若配置了明文 HTTP 端点则返回空 dict —— 宁可该功能不可用，
+    也不能把用户数据送上未加密的链路。
+    """
+    reason = qcc_disabled_reason()
+    if reason:
+        logger.error("[qcc] disabled: %s", reason)
+        return {}
     base = _mcp_base_url()
     return {name: f"{base}/{path}" for name, path in _QCC_SERVICE_PATHS.items()}
 
@@ -406,6 +441,9 @@ class QccSessionManager:
         self._lock = threading.Lock()
 
     def _get_session(self, service: str) -> QccMcpSession:
+        reason = qcc_disabled_reason()
+        if reason:
+            raise QccMcpError(f"QCC disabled in current deploy region: {reason}")
         urls = get_qcc_base_urls()
         if service not in urls:
             raise QccMcpError(f"Unknown QCC service: {service}")

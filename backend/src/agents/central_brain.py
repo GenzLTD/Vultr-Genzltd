@@ -146,7 +146,10 @@ def _call_llm(
     Returns response text or None on failure.
     Every call is audited into llm_usage (provider/model/tokens/cost/latency)."""
     config = current_app.config
-    provider_order = [p.strip().lower() for p in config.get("LLM_PROVIDER_ORDER", "deepseek").split(",")]
+    # 区域过滤：海外区剔除境内 provider（数据出境合规）
+    from src.config import safe_llm_provider_order
+
+    provider_order = safe_llm_provider_order(config.get("LLM_PROVIDER_ORDER", "deepseek"))
     db = getattr(current_app, "_db", None)
 
     for provider in provider_order:
