@@ -7,7 +7,6 @@
  */
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { useTranslation } from "react-i18next";
 import { createSaasApiClient } from "../../api/saasApiClient";
 import { useSaasAuthStore } from "../auth/authStore";
 import { IS_OVERSEAS } from "../../config/region";
@@ -100,7 +99,6 @@ function formatPrice(plan: MembershipPlan): string {
 }
 
 export default function Subscription() {
-  const { t } = useTranslation();
   const { isAuthenticated, token, fetchProfile } = useSaasAuthStore();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
