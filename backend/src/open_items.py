@@ -74,10 +74,24 @@ def _probe_open_items(cfg) -> list[dict]:
          "微信支付商户凭证不完整，下单将静默返回 stub 假订单", P0,
          f"缺失: {', '.join(missing) or '无'}", ok=not missing)
 
-    # DeepSeek (LLM primary provider).
-    _add(items, "deepseek-key",
-         "DeepSeek API Key 未配置，LLM 主 provider 不可用", P0,
-         "DEEPSEEK_API_KEY 为空或占位", ok=_is_set(cfg.get("DEEPSEEK_API_KEY")))
+    # LLM 候选 provider —— 按**部署区域过滤后**判定。
+    # 海外区会剔除境内 provider（deepseek），所以不能再用 DEEPSEEK_API_KEY 单独
+    # 判定"主 provider 可用"：那会让 SG 长期挂着一条永远不会被用到的 P0，同时
+    # 漏掉"候选换成了 openai 却没配 key"这种真正致命的情况。
+    from src.config import safe_llm_provider_order
+
+    _llm_order = safe_llm_provider_order(cfg.get("LLM_PROVIDER_ORDER") or "deepseek")
+    _llm_needs = {
+        "deepseek": "DEEPSEEK_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "ollama": "OLLAMA_MODEL",
+    }
+    _llm_ready = [p for p in _llm_order if _is_set(cfg.get(_llm_needs.get(p)))]
+    _add(items, "llm-provider",
+         "LLM 候选 provider 全部不可用，主链会整体失败", P0,
+         f"区域过滤后候选: {', '.join(_llm_order) or '空'}"
+         f"；可用: {', '.join(_llm_ready) or '无'}",
+         ok=bool(_llm_order) and bool(_llm_ready))
 
     # QCC credit data source.
     qcc_enabled = bool(cfg.get("QCC_ENABLED", True))
