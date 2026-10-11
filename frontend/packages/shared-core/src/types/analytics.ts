@@ -21,7 +21,14 @@ export type ClosedLoopEventName =
   | "trial_started"
   | "trial_failed"
   | "trial_clicked"
-  | "funnel_drop";
+  | "funnel_drop"
+  // 支付漏斗（海外会员）—— 缺这组事件时「有购买意向」这一段完全不可观测，
+  // 只能看到最终订单结果，算不出任何转化率。
+  | "pricing_viewed"
+  | "subscribe_clicked"
+  | "checkout_redirected"
+  | "checkout_failed"
+  | "payment_succeeded";
 
 export interface ProductEventPayload {
   event_name: ClosedLoopEventName;

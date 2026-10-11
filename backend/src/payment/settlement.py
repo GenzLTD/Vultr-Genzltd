@@ -49,4 +49,41 @@ def settle_payment(
         "[%s] Payment confirmed: user=%s tier=%s order=%s txn=%s",
         provider_name, user_id, tier, out_trade_no, transaction_id,
     )
+    _record_payment_event(db, user_id, tier, out_trade_no, paid_order)
     return paid_order
+
+
+def _record_payment_event(
+    db: Any,
+    user_id: str,
+    tier: str,
+    out_trade_no: str,
+    order: dict,
+) -> None:
+    """服务端记一笔 payment_succeeded。
+
+    漏斗终点必须由服务端产生 —— 前端上报的「付款成功」不可信（可伪造），
+    而这里是唯一「钱确实到账」的地方。
+    """
+    log_event = getattr(db, "log_product_event", None)
+    if log_event is None:
+        return
+    try:
+        log_event(
+            event_name="payment_succeeded",
+            user_id=user_id,
+            platform="tspace_web",
+            source="server",
+            success=True,
+            properties={
+                "tier": tier,
+                "out_trade_no": out_trade_no,
+                "amount": order.get("amount"),
+                "currency": order.get("currency"),
+            },
+        )
+    except Exception:  # 埋点失败绝不能影响结算结果
+        logger.warning(
+            "[settlement] failed to record payment_succeeded: order=%s",
+            out_trade_no, exc_info=True,
+        )

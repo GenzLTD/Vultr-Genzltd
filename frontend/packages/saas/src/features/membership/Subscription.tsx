@@ -7,6 +7,7 @@
  */
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { PAYMENT_FUNNEL_EVENTS, trackEvent, flushEvents } from "@looma/shared-core";
 import { createSaasApiClient } from "../../api/saasApiClient";
 import { useSaasAuthStore } from "../auth/authStore";
 import { IS_OVERSEAS } from "../../config/region";
@@ -124,6 +125,9 @@ export default function Subscription() {
         setPlans(cards);
         setTax(resp.tax ?? null);
         setBillingEntity(resp.billing_entity ?? "YEDALL LIMITED");
+        trackEvent(PAYMENT_FUNNEL_EVENTS.PRICING_VIEWED, {
+          properties: { region: resp.region, plan_count: cards.length },
+        });
       } catch {
         if (!cancelled) setMessage(IS_OVERSEAS ? "Unable to load plans. Please try again later." : "无法加载套餐，请稍后重试");
       } finally {
@@ -182,6 +186,7 @@ export default function Subscription() {
 
     setSubscribingTier(tier);
     setMessage(null);
+    trackEvent(PAYMENT_FUNNEL_EVENTS.SUBSCRIBE_CLICKED, { properties: { tier } });
 
     try {
       const client = createSaasApiClient();
@@ -191,9 +196,17 @@ export default function Subscription() {
         success_url: `${window.location.origin}/subscribe?status=success`,
         cancel_url: `${window.location.origin}/subscribe?status=cancel`,
       });
+      // 跳转前必须 flush：trackEvent 是 300ms 批量上报，
+      // 直接跳走会把这条丢掉 —— 而它正是漏斗里最关键的一步。
+      trackEvent(PAYMENT_FUNNEL_EVENTS.CHECKOUT_REDIRECTED, { properties: { tier } });
+      await flushEvents();
       window.location.href = checkout.checkout_url;
     } catch (err: any) {
       const status = err?.status ?? err?.body?.status;
+      trackEvent(PAYMENT_FUNNEL_EVENTS.CHECKOUT_FAILED, {
+        success: false,
+        properties: { tier, reason: err?.body?.error ?? String(status ?? "unknown") },
+      });
       if (status === 400 && err?.body?.error === "stub_mode") {
         setMessage(
           IS_OVERSEAS

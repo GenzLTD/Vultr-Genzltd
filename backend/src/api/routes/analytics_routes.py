@@ -32,6 +32,12 @@ VALID_EVENTS = frozenset({
     "trial_failed",
     "trial_clicked",
     "funnel_drop",
+    # 支付漏斗（海外会员）—— 前四个客户端采集，payment_succeeded 由服务端写入
+    "pricing_viewed",
+    "subscribe_clicked",
+    "checkout_redirected",
+    "checkout_failed",
+    "payment_succeeded",
 })
 
 VALID_FEEDBACK_CONTEXTS = frozenset({

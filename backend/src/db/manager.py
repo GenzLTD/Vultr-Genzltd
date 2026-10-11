@@ -3599,6 +3599,11 @@ END;
             "hr_register_from_share",
             "candidate_imported",
             "trial_started",
+            # 支付漏斗（海外会员）
+            "pricing_viewed",
+            "subscribe_clicked",
+            "checkout_redirected",
+            "payment_succeeded",
         ]
         since = f"-{int(days)} days"
         with self.get_conn() as conn:
@@ -3639,6 +3644,10 @@ END;
             "view_after_share": rate(steps["profile_view_public"], steps["share_code_created"]),
             "import_after_view": rate(steps["candidate_imported"], steps["profile_view_public"]),
             "trial_after_import": rate(steps["trial_started"], steps["candidate_imported"]),
+            # 支付漏斗：看不到价格就不可能付费，付费率是「生意能不能做成」的直接读数
+            "click_after_view": rate(steps["subscribe_clicked"], steps["pricing_viewed"]),
+            "checkout_after_click": rate(steps["checkout_redirected"], steps["subscribe_clicked"]),
+            "paid_after_checkout": rate(steps["payment_succeeded"], steps["checkout_redirected"]),
         }
         return {
             "days": days,

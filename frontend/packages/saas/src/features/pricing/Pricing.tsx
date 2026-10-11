@@ -9,7 +9,9 @@ import {
   createPaymentApi,
   createEnterpriseApi,
   CLOSED_LOOP_EVENTS,
+  PAYMENT_FUNNEL_EVENTS,
   trackEvent,
+  flushEvents,
   type PaymentPlan,
   type ContactSalesRequest,
   type WechatOrderResponse,
@@ -143,6 +145,9 @@ export default function Pricing() {
         }));
         setPlans(IS_OVERSEAS ? cards : [...cards, ENTERPRISE_CARD]);
         setStubMode(providersResp?.stub_mode === true);
+        trackEvent(PAYMENT_FUNNEL_EVENTS.PRICING_VIEWED, {
+          properties: { region: BILLING_REGION, plan_count: cards.length },
+        });
       } catch {
         if (!cancelled) {
           setMessage("无法加载套餐价格，请稍后重试");
@@ -213,6 +218,9 @@ export default function Pricing() {
     setUpgradingTier(tier);
     setMessage(null);
     trackEvent(CLOSED_LOOP_EVENTS.TRIAL_CLICKED);
+    trackEvent(PAYMENT_FUNNEL_EVENTS.SUBSCRIBE_CLICKED, {
+      properties: { tier, entry: "pricing" },
+    });
 
     try {
       const client = createSaasApiClient();
@@ -244,6 +252,11 @@ export default function Pricing() {
           success_url: `${window.location.origin}/pricing?status=success`,
           cancel_url: `${window.location.origin}/pricing?status=cancel`,
         });
+        // 跳转前 flush，否则这条会随页面卸载一起丢掉
+        trackEvent(PAYMENT_FUNNEL_EVENTS.CHECKOUT_REDIRECTED, {
+          properties: { tier, entry: "pricing" },
+        });
+        await flushEvents();
         window.location.href = checkout.checkout_url;
       } else {
         const orderResp = await createPaymentApi(client).wechatOrder({
@@ -257,6 +270,14 @@ export default function Pricing() {
         pollPaymentStatus(orderResp.out_trade_no);
       }
     } catch (err: any) {
+      trackEvent(PAYMENT_FUNNEL_EVENTS.CHECKOUT_FAILED, {
+        success: false,
+        properties: {
+          tier,
+          entry: "pricing",
+          reason: err?.body?.error ?? String(err?.status ?? "unknown"),
+        },
+      });
       if (err?.status === 402) {
         setMessage(IS_OVERSEAS ? "Payment required. Contact support to enable checkout." : "此服务需要真实支付，请联系管理员开通");
       } else {
