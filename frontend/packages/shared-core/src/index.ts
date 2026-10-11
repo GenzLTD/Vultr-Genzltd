@@ -393,6 +393,7 @@ export type {
 
 export {
   CLOSED_LOOP_EVENTS,
+  PAYMENT_FUNNEL_EVENTS,
   MICRO_FEEDBACK_CONTEXT,
   ANALYTICS_SESSION_KEY,
 } from "./constants/analytics";
