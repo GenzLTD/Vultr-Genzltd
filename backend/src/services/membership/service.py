@@ -180,6 +180,64 @@ class MembershipService:
             "billing_entity": BILLING_ENTITY,
         }
 
+    def create_billing_portal(
+        self,
+        db: Any,
+        config: dict[str, Any],
+        user_id: str,
+        return_url: str = "",
+    ) -> tuple[dict[str, Any], int]:
+        """创建 Stripe Billing Portal 会话 —— 用户自助取消 / 换卡 / 取发票。
+
+        为什么给一个托管页 URL 而不是自己做取消按钮：自助管理页是「取消要和
+        订阅一样容易」的最省事落法（EU 消费者权利指令 / FTC negative-option），
+        且不必为每个地区各写一套 UI。
+
+        本方法**只开会话、不改库**：真正的订阅状态变化仍由 webhook 驱动
+        （见 handle_stripe_webhook），避免两处各自推理订阅状态而互相打架。
+        """
+        refs = db.find_stripe_refs_for_user(user_id) or {}
+        customer_id = refs.get("stripe_customer_id") or ""
+        if not customer_id:
+            return (
+                {
+                    "error": "no_billing_customer",
+                    "message": "当前账号没有可管理的订阅记录（尚未完成过 Stripe 结账）。",
+                },
+                404,
+            )
+
+        provider = get_provider(PROVIDER_NAME)
+        if not provider.is_configured(config):
+            return (
+                {
+                    "error": "payment_not_configured",
+                    "message": "Stripe not configured. Set STRIPE_SECRET_KEY env var.",
+                },
+                503,
+            )
+
+        try:
+            session = provider.create_billing_portal_session(
+                config=config, customer_id=customer_id, return_url=return_url,
+            )
+        except Exception as e:  # noqa: BLE001 — 上游失败如实回报，不能假装成功
+            logger.warning(
+                "[membership] billing portal failed: user=%s err=%s", user_id, e
+            )
+            return (
+                {"error": "portal_unavailable", "message": "订阅管理页暂时不可用，请稍后重试。"},
+                502,
+            )
+
+        if not session.get("url"):
+            logger.warning("[membership] billing portal returned no url: user=%s", user_id)
+            return (
+                {"error": "portal_unavailable", "message": "订阅管理页暂时不可用，请稍后重试。"},
+                502,
+            )
+        return ({"url": session["url"], "provider": PROVIDER_NAME}, 200)
+
     def handle_stripe_webhook(
         self,
         db: Any,
