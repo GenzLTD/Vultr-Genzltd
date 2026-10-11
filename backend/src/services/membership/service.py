@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from src.payment.plans import get_plan_for_tier, list_plans_for_region
@@ -17,6 +18,8 @@ MEMBERSHIP_TIERS = ("supporter", "pro")
 BILLING_REGION = "US"
 BILLING_ENTITY = "YEDALL LIMITED"
 PROVIDER_NAME = "stripe"
+
+logger = logging.getLogger("looma.membership")
 
 
 class MembershipService:
@@ -201,12 +204,82 @@ class MembershipService:
         if result.event_type == "checkout.completed":
             if not result.out_trade_no:
                 return ({"status": "ok"}, 200)
-            settle_payment(db, result.out_trade_no, result.transaction_id, "stripe-membership")
+            settle_payment(
+                db,
+                result.out_trade_no,
+                result.transaction_id,
+                "stripe-membership",
+                customer_id=result.customer_id,
+                subscription_id=result.subscription_id,
+            )
         elif result.event_type == "subscription.renewed":
-            # TODO: 续期延展订阅有效期 +30 天（依赖 Stripe invoice 携带 out_trade_no）
-            pass
+            return self._handle_renewal(db, result)
         elif result.event_type == "subscription.cancelled":
-            # TODO: 按 Stripe customer_id 定位用户并降级 free
-            pass
+            return self._handle_cancellation(db, result)
 
+        return ({"status": "ok"}, 200)
+
+    # ── 订阅生命周期（续费 / 取消）──────────────────────────
+
+    @staticmethod
+    def _resolve_user_id(db: Any, result: Any) -> str | None:
+        """为一个生命周期事件定位归属用户。
+
+        续费事件带 out_trade_no（已随订阅元数据下发）；取消事件只带
+        provider 侧 id，故回退到结算时留在订单上的 stripe_* 引用。
+        """
+        if result.out_trade_no:
+            order = db.get_order_by_out_trade_no(result.out_trade_no)
+            if order:
+                return order.get("user_id")
+        for attr, key in (
+            ("find_order_by_stripe_subscription", result.subscription_id),
+            ("find_order_by_stripe_customer", result.customer_id),
+        ):
+            if not key:
+                continue
+            finder = getattr(db, attr, None)
+            if finder is None:
+                continue
+            order = finder(key)
+            if order:
+                return order.get("user_id")
+        return None
+
+    def _handle_renewal(self, db: Any, result: Any) -> tuple[dict[str, Any], int]:
+        """subscription.renewed：顺延已购时长。
+
+        刻意不走 settle_payment()——原始订单已是 paid，
+        那里的幂等守卫（status == 'paid' → return None）会把续费整个吞掉。
+        """
+        user_id = self._resolve_user_id(db, result)
+        if not user_id:
+            logger.warning(
+                "[membership] renewal unresolvable: sub=%s customer=%s out_trade_no=%s",
+                result.subscription_id or "-",
+                result.customer_id or "-",
+                result.out_trade_no or "-",
+            )
+            # 回 200，避免 Stripe 对无法处理的再投递无限重试。
+            return ({"status": "ok", "resolved": False}, 200)
+
+        sub = db.renew_subscription(user_id, days=30)
+        logger.info(
+            "[membership] renewal applied: user=%s expires_at=%s",
+            user_id, (sub or {}).get("expires_at"),
+        )
+        return ({"status": "ok", "expires_at": (sub or {}).get("expires_at")}, 200)
+
+    def _handle_cancellation(self, db: Any, result: Any) -> tuple[dict[str, Any], int]:
+        """subscription.cancelled：订阅结束，标记过期并降级 free。"""
+        user_id = self._resolve_user_id(db, result)
+        if not user_id:
+            logger.warning(
+                "[membership] cancellation unresolvable: sub=%s customer=%s",
+                result.subscription_id or "-", result.customer_id or "-",
+            )
+            return ({"status": "ok", "resolved": False}, 200)
+
+        db.expire_subscription(user_id)
+        logger.info("[membership] subscription cancelled: user=%s", user_id)
         return ({"status": "ok"}, 200)

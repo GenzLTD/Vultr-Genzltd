@@ -90,6 +90,17 @@ class StripeProvider(BaseProvider):
                 data["line_items[0][price_data][recurring][interval]"] = "month"
                 data["line_items[0][price_data][product_data][name]"] = plan_name
 
+            # Session metadata does NOT propagate to the Subscription object.
+            # Set it on subscription_data so later renewals (invoice.paid) and
+            # cancellations (customer.subscription.deleted) can be traced back
+            # to our internal order / user.
+            for k, v in (metadata or {}).items():
+                if k == "stripe_price_id" or v is None:
+                    continue
+                data[f"subscription_data[metadata][{k}]"] = str(v)
+            data["subscription_data[metadata][out_trade_no]"] = out_trade_no
+            data["subscription_data[metadata][tier]"] = tier
+
         # ── Stripe Tax（香港主体 YEDALL LIMITED — Stripe Tax 自动算税并代缴）──
         # 对所有 Stripe 结账（含原 payment 链路）自动生效；不传开关则默认开启。
         tax_enabled = str(config.get("STRIPE_TAX_ENABLED", "true")).lower() in ("1", "true", "yes", "on")
@@ -171,6 +182,7 @@ class StripeProvider(BaseProvider):
                 out_trade_no=obj.get("client_reference_id", "") or "",
                 transaction_id=obj.get("payment_intent", "") or "",
                 customer_id=obj.get("customer", "") or "",
+                subscription_id=obj.get("subscription", "") or "",
                 amount_total=obj.get("amount_total", 0),
                 currency=(obj.get("currency", "usd")).upper(),
                 tier=(obj.get("metadata", {}) or {}).get("tier", ""),
