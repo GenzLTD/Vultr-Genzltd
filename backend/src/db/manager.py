@@ -1130,6 +1130,34 @@ NON_FK_USER_TABLES = (
 
 PAID_ORDER_STATUSES = ("paid", "refunded")
 
+# 导出时一律剔除的凭据类列。双重保险：
+#   * 精确表项覆盖已知的 users.password_hash；
+#   * 片段规则兜住后续新增的凭据字段 —— 不能指望"有人记得把它加进白名单"。
+REDACTED_EXPORT_COLUMNS = {
+    "users": frozenset({"password_hash"}),
+}
+
+_REDACT_COLUMN_SUBSTRINGS = ("password", "passwd", "secret", "private_key", "api_key")
+_REDACT_COLUMN_TOKENS = ("token",)
+
+
+def _is_redacted_export_column(table: str, column: str) -> bool:
+    """该列是否属于导出时必须剔除的凭据（不可逆摘要 / 密钥 / 会话令牌）。"""
+    col = (column or "").lower()
+    if col in REDACTED_EXPORT_COLUMNS.get(table, ()):
+        return True
+    if any(s in col for s in _REDACT_COLUMN_SUBSTRINGS):
+        return True
+    return any(col == s or col.endswith("_" + s) for s in _REDACT_COLUMN_TOKENS)
+
+
+def _redact_export_row(table: str, row: dict) -> dict:
+    """返回剔除凭据列后的行副本。
+
+    密码哈希这类不可逆摘要不属于「数据主体可携带的数据」—— 导出它既无意义，
+    又白白扩大凭据泄露面。"""
+    return {k: v for k, v in row.items() if not _is_redacted_export_column(table, k)}
+
 # purge_test_orders 允许清理的订单状态白名单默认值（绝不含 PAID_ORDER_STATUSES）。
 PURGEABLE_ORDER_STATUSES = ("pending", "expired")
 
@@ -3038,6 +3066,82 @@ END;
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def _collect_owned_ids(self, conn, user_id: str) -> tuple:
+        """沿外键图收集属于 ``user_id`` 的全部行主键（迭代至不动点）。
+
+        返回 ``(tabs, pk, order, removed)``：
+
+          * ``tabs``    —— 库内全部业务表名
+          * ``pk``      —— 表 -> 主键列名（无 ``id`` 时退化为 ``rowid``）
+          * ``order``   —— 外键反向拓扑序（子表在前、父表在后）
+          * ``removed`` —— 表 -> 该用户可达的行主键集合
+
+        ``users`` 自身先播种为 ``{user_id}``，再沿外键向下扩散；孙表
+        （如 match_report_items 经由 match_reports 关联）靠不动点迭代覆盖。
+
+        **delete_user 与 export_user_data 共用本方法**：数据主体的「导出范围」
+        与「删除范围」必须是同一份集合，否则会出现导出漏了、删除却删了
+        （或反之）这种自相矛盾的合规表现。
+        """
+        tabs = [
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+                " AND name NOT LIKE 'sqlite_%'"
+            )
+        ]
+
+        pk, fks, children = {}, [], {}
+        for t in tabs:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(%s)" % t)]
+            pk[t] = "id" if "id" in cols else "rowid"
+            for fk in conn.execute("PRAGMA foreign_key_list(%s)" % t):
+                parent, child_col = fk[2], fk[3]
+                fks.append((t, child_col, parent))
+                if parent != t:
+                    children.setdefault(parent, set()).add(t)
+
+        # 外键反向拓扑序：子表排在父表之前
+        order, state = [], {}
+
+        def visit(t):
+            if state.get(t) in (1, 2):
+                return          # 1=环中，交由不动点迭代兜底
+            state[t] = 1
+            for ch in children.get(t, ()):
+                visit(ch)
+            state[t] = 2
+            order.append(t)
+
+        for t in tabs:
+            visit(t)
+
+        # 收集行主键（iterate to fixpoint）
+        removed = {t: set() for t in tabs}
+        removed["users"] = {user_id}
+        for _ in range(30):
+            changed = False
+            for child, child_col, parent in fks:
+                parent_ids = [v for v in removed.get(parent, ()) if v is not None]
+                if not parent_ids or child == "users":
+                    continue
+                found = set()
+                for i in range(0, len(parent_ids), 400):
+                    block = parent_ids[i:i + 400]
+                    rows = conn.execute(
+                        "SELECT %s FROM %s WHERE %s IN (%s)"
+                        % (pk[child], child, child_col, ",".join("?" * len(block))),
+                        block,
+                    ).fetchall()
+                    found |= {r[0] for r in rows}
+                found -= removed[child]
+                if found:
+                    removed[child] |= found
+                    changed = True
+            if not changed:
+                break
+
+        return tabs, pk, order, removed
+
     def delete_user(self, user_id: str, include_audit: bool = False) -> dict:
         """删除用户及其全部依赖行，返回 ``{"user_id":..., "deleted": {table: n}}``。
 
@@ -3062,64 +3166,7 @@ END;
             raise PaidOrderBlockedError(user_id, paid_orders)
 
         with self.get_conn() as conn:
-            tabs = [
-                r[0] for r in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                    " AND name NOT LIKE 'sqlite_%'"
-                )
-            ]
-
-            pk, fks, children, fk_cols = {}, [], {}, {}
-            for t in tabs:
-                cols = [r[1] for r in conn.execute("PRAGMA table_info(%s)" % t)]
-                pk[t] = "id" if "id" in cols else "rowid"
-                fk_cols[t] = set()
-                for fk in conn.execute("PRAGMA foreign_key_list(%s)" % t):
-                    parent, child_col = fk[2], fk[3]
-                    fks.append((t, child_col, parent))
-                    fk_cols[t].add(child_col)
-                    if parent != t:
-                        children.setdefault(parent, set()).add(t)
-
-            # 外键反向拓扑序：子表排在父表之前
-            order, state = [], {}
-
-            def visit(t):
-                if state.get(t) in (1, 2):
-                    return          # 1=环中，交由不动点迭代兜底
-                state[t] = 1
-                for ch in children.get(t, ()):
-                    visit(ch)
-                state[t] = 2
-                order.append(t)
-
-            for t in tabs:
-                visit(t)
-
-            # 收集待删主键（iterate to fixpoint）
-            removed = {t: set() for t in tabs}
-            removed["users"] = {user_id}
-            for _ in range(30):
-                changed = False
-                for child, child_col, parent in fks:
-                    parent_ids = [v for v in removed.get(parent, ()) if v is not None]
-                    if not parent_ids or child == "users":
-                        continue
-                    found = set()
-                    for i in range(0, len(parent_ids), 400):
-                        block = parent_ids[i:i + 400]
-                        rows = conn.execute(
-                            "SELECT %s FROM %s WHERE %s IN (%s)"
-                            % (pk[child], child, child_col, ",".join("?" * len(block))),
-                            block,
-                        ).fetchall()
-                        found |= {r[0] for r in rows}
-                    found -= removed[child]
-                    if found:
-                        removed[child] |= found
-                        changed = True
-                if not changed:
-                    break
+            tabs, pk, order, removed = self._collect_owned_ids(conn, user_id)
 
             deleted = {}
 
@@ -3155,6 +3202,84 @@ END;
                     deleted[table] = deleted.get(table, 0) + cur.rowcount
 
             return {"user_id": user_id, "deleted": deleted}
+
+    def export_user_data(
+        self,
+        user_id: str,
+        include_audit: bool = False,
+        max_rows_per_table: int = 10000,
+    ) -> dict:
+        """导出该用户的全部个人数据（GDPR Art.15 查阅权 / PIPL 第 45 条可携带权）。
+
+        与 ``delete_user`` 共用 ``_collect_owned_ids``，保证「导出看到的」与
+        「删除删掉的」是同一份行集合。
+
+        安全约定：
+          * 只按 ``user_id`` 取数，调用方无法指定他人；
+          * 凭据列一律剔除（见 ``_redact_export_row``）；
+          * 无外键表（query_logs / product_events）显式补扫 —— 沿外键遍历
+            永远覆盖不到它们，漏掉会让导出看起来"少了一块"；
+          * audit_logs 默认不导出（与 delete_user 的 include_audit 语义一致）；
+          * 单表超 ``max_rows_per_table`` 时截断并在 ``truncated`` 中标注，
+            避免一次响应把进程拖垮。
+
+        返回 ``{"user_id", "tables": {表: [行dict]}, "counts": {表: n},
+        "truncated": [表]}``。
+        """
+        with self.get_conn() as conn:
+            tabs, pk, _order, removed = self._collect_owned_ids(conn, user_id)
+
+            tables: dict = {}
+            counts: dict = {}
+            truncated: list = []
+
+            for t in sorted(removed):
+                values = [v for v in removed.get(t, ()) if v is not None]
+                if not values:
+                    continue
+                rows: list = []
+                for i in range(0, len(values), 400):
+                    block = values[i:i + 400]
+                    cur = conn.execute(
+                        "SELECT * FROM %s WHERE %s IN (%s)"
+                        % (t, pk[t], ",".join("?" * len(block))),
+                        block,
+                    )
+                    cols = [d[0] for d in cur.description]
+                    for r in cur.fetchall():
+                        rows.append(_redact_export_row(t, dict(zip(cols, r))))
+                if not rows:
+                    continue
+                counts[t] = len(rows)
+                if len(rows) > max_rows_per_table:
+                    truncated.append(t)
+                    rows = rows[:max_rows_per_table]
+                tables[t] = rows
+
+            # 无外键表：沿外键遍历永远覆盖不到，必须显式补扫
+            for table, column, is_audit in NON_FK_USER_TABLES:
+                if is_audit and not include_audit:
+                    continue
+                if table not in tabs:
+                    continue
+                cur = conn.execute(
+                    "SELECT * FROM %s WHERE %s = ?" % (table, column), (user_id,)
+                )
+                cols = [d[0] for d in cur.description]
+                rows = [
+                    _redact_export_row(table, dict(zip(cols, r)))
+                    for r in cur.fetchall()
+                ]
+                if rows:
+                    tables[table] = rows
+                    counts[table] = len(rows)
+
+            return {
+                "user_id": user_id,
+                "tables": tables,
+                "counts": counts,
+                "truncated": truncated,
+            }
 
     def purge_test_orders(
         self,
