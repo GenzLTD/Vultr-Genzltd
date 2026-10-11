@@ -47,11 +47,26 @@ set_kv RATE_LIMIT_STORAGE_URI redis://redis:6379/1
 set_kv DEPLOY_REGION SG
 set_kv CORS_ORIGINS "${CORS_ORIGINS:-https://genz.ltd,https://www.genz.ltd,https://tspace.genz.ltd,https://api.genz.ltd,https://app.genz.ltd,https://tspace.szbolent.cn}"
 set_kv GOOGLE_REDIRECT_URI "${GOOGLE_REDIRECT_URI:-https://api.genz.ltd/v1/auth/google/callback}"
+# ── 海外区（DEPLOY_REGION=SG）数据出境约束 ──────────────────────────
+# src.config.safe_llm_provider_order 会在海外区剔除境内 LLM（deepseek）。候选里
+# 不再写 deepseek —— 写进去也会被静默剔除，不如让 .env 直接显示真实行为。
+# 代价：SG 的 LLM 只剩 openai / ollama，**必须先配好 OPENAI_API_KEY**（见下方
+# seed_kv），否则主链整体不可用。
 set_kv DEEPSEEK_BASE_URL https://api.deepseek.com/v1
 set_kv DEEPSEEK_MODEL deepseek-chat
-set_kv LLM_PROVIDER_ORDER deepseek,openai,ollama
-set_kv QCC_ENABLED true
-set_kv QCC_MCP_BASE_URL "${QCC_MCP_BASE_URL:-http://1.14.202.161:8998/mcp}"
+set_kv LLM_PROVIDER_ORDER "${LLM_PROVIDER_ORDER:-openai,ollama}"
+
+# QCC：海外区拒绝明文 HTTP 端点（src.credit.qcc_client.qcc_disabled_reason），
+# 所以让 QCC_ENABLED 跟着端点 scheme 走 —— 避免"开关是 true、每次调用都失败"
+# 的迷惑态。要恢复企查查：把 GitHub 变量 QCC_MCP_BASE_URL 设为 HTTPS
+# （如官方 https://agent.qcc.com/mcp），下面会自动置 true。
+QCC_BASE="${QCC_MCP_BASE_URL:-http://1.14.202.161:8998/mcp}"
+case "$QCC_BASE" in
+  https://*) QCC_ENABLED_AUTO=true ;;
+  *)         QCC_ENABLED_AUTO=false ;;
+esac
+set_kv QCC_MCP_BASE_URL "$QCC_BASE"
+set_kv QCC_ENABLED "$QCC_ENABLED_AUTO"
 set_kv STRIPE_SUCCESS_URL https://tspace.genz.ltd/pricing?status=success
 set_kv STRIPE_CANCEL_URL https://tspace.genz.ltd/pricing?status=cancel
 set_kv STRIPE_TAX_ENABLED true

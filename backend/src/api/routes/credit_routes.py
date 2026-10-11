@@ -72,6 +72,15 @@ def _qcc_is_configured() -> bool:
     ).lower() in ("1", "true", "yes", "on")
     if not enabled:
         return False
+    # 海外部署 + 明文 HTTP 端点会被 qcc_client 整体拒绝（qcc_disabled_reason）。
+    # 这里跟着一起判，否则接口会对外声称"已配置"，而每一次调用都失败。
+    try:
+        from src.credit.qcc_client import qcc_disabled_reason
+
+        if qcc_disabled_reason():
+            return False
+    except Exception:
+        pass
     try:
         from src.credit.qcc_client import _resolve_auth_token
         return bool(_resolve_auth_token())

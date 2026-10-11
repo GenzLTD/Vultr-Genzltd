@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -168,6 +169,76 @@ class TestOverseasDataPlane:
         assert "覆盖" in text
         assert "zervi@genz.ltd" in text
         assert "DEPLOY_ENABLED" in text
+
+
+class TestOverseasEgressGuardsInBootstrap:
+    """海外区数据出境守卫的**配置侧**不变量。
+
+    运行时行为在 backend/tests/（`test_overseas_provider_isolation.py` 与
+    `test_overseas_readiness_consistency.py`）。这里只守纯文本配置 —— 本文件必须
+    能被 runpy 独立执行，不 import backend。
+
+    守的原因：`bootstrap-env.sh` 是目标机 `.env` 的每轮对齐源，而海外区的运行时
+    还要过一层守卫。两边一旦脱节，就会出现「.env 写着 deepseek、运行时被静默
+    剔除」「开关 true、调用全失败」这类不报错、但上线后功能莫名不可用的错配。
+    """
+
+    def test_llm_order_keeps_a_non_inland_candidate(self):
+        """海外区会剔除境内 provider(deepseek)，候选里必须留非境内的。
+
+        否则过滤后为空 —— 那不算「安全降级」，是 LLM 主链整体不可用。
+        """
+        lines = [
+            line for line in BOOTSTRAP_ENV.read_text(encoding="utf-8").splitlines()
+            if line.startswith("set_kv LLM_PROVIDER_ORDER")
+        ]
+        assert lines, "bootstrap-env.sh 必须声明 LLM_PROVIDER_ORDER"
+        assert ("openai" in lines[0]) or ("ollama" in lines[0]), (
+            f"候选里没有非境内 provider，海外区会被过滤成空: {lines[0]}"
+        )
+
+    def test_qcc_enabled_is_derived_from_the_endpoint_scheme(self):
+        """QCC_ENABLED 不得写死。
+
+        海外区拒绝明文 HTTP 端点（`credit.qcc_client.qcc_disabled_reason`）。
+        写死 true 就成了「开关开着、每次调用都失败」。
+        """
+        text = BOOTSTRAP_ENV.read_text(encoding="utf-8")
+        assert 'set_kv QCC_ENABLED "$QCC_ENABLED_AUTO"' in text, (
+            "QCC_ENABLED 必须由端点 scheme 推导"
+        )
+        mapping = dict(re.findall(r"^\s*(\S+)\)\s*QCC_ENABLED_AUTO=(\w+)", text, re.M))
+        assert mapping.get("https://*") == "true", "HTTPS 端点应放行 QCC"
+        assert mapping.get("*") == "false", "非 HTTPS（含明文 HTTP）端点应关闭 QCC"
+
+    def test_qcc_base_default_is_explicit(self):
+        """QCC 端点默认值要显式写出，便于一处切换 —— 不留隐含兜底。"""
+        text = BOOTSTRAP_ENV.read_text(encoding="utf-8")
+        assert re.search(r'QCC_BASE="\$\{QCC_MCP_BASE_URL:-[^}]+\}"', text), (
+            'bootstrap-env.sh 必须以 QCC_BASE="${QCC_MCP_BASE_URL:-<默认>}" 定义端点'
+        )
+
+
+class TestGatesAndDeployConcurrency:
+    """门禁按 ref 隔离、部署全局串行且**不可取消**。
+
+    旧的单组写法（workflow 级 `group: deploy-stack` + `cancel-in-progress: true`）
+    让所有 ref 共用一个组，并发到达的运行互相取消 —— 实测被取消 4 次。PR 门禁被
+    取消尤其危险：界面显示「跑过了」，实际一条断言都没执行。
+    """
+
+    def test_gate_concurrency_is_ref_scoped(self):
+        text = DEPLOY_YML.read_text(encoding="utf-8")
+        assert "group: stack-gates-${{ github.ref }}" in text, (
+            "门禁的 concurrency 组必须按 ref 隔离，否则并发 PR 的运行互相取消"
+        )
+
+    def test_deploy_is_serialized_and_not_cancellable(self):
+        text = DEPLOY_YML.read_text(encoding="utf-8")
+        assert "group: deploy-stack" in text, "部署要有独立的全局组"
+        assert "cancel-in-progress: false" in text, (
+            "部署不能中途被取消：中断会留下半套栈"
+        )
 
 
 if __name__ == "__main__":
