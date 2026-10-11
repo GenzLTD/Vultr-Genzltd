@@ -110,7 +110,7 @@ class StripeProvider(BaseProvider):
             data["automatic_tax[enabled]"] = "true"
             data["tax_id_collection[enabled]"] = "true"
             if "line_items[0][price_data][currency]" in data:
-                tax_code = config.get("STRIPE_TAX_CODE", "txcd_30040001")
+                tax_code = config.get("STRIPE_TAX_CODE", "txcd_10103000")
                 data["line_items[0][price_data][product_data][tax_code]"] = tax_code
 
         result = self._api_request("POST", "/checkout/sessions", secret_key, data)

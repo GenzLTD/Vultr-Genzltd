@@ -132,7 +132,7 @@ class Config:
 
     # Stripe Tax（香港主体 YEDALL LIMITED 代算代缴）
     STRIPE_TAX_ENABLED = os.getenv("STRIPE_TAX_ENABLED", "true")
-    STRIPE_TAX_CODE = os.getenv("STRIPE_TAX_CODE", "txcd_30040001")
+    STRIPE_TAX_CODE = os.getenv("STRIPE_TAX_CODE", "txcd_10103000")
 
     # PayPal (overseas payment)
     PAYPAL_CLIENT_ID = os.getenv("PAYPAL_CLIENT_ID", "")
@@ -288,7 +288,7 @@ def _refresh_config():
 
     # Stripe Tax（香港主体 YEDALL LIMITED 代算代缴）
     Config.STRIPE_TAX_ENABLED = os.getenv("STRIPE_TAX_ENABLED", "true")
-    Config.STRIPE_TAX_CODE = os.getenv("STRIPE_TAX_CODE", "txcd_30040001")
+    Config.STRIPE_TAX_CODE = os.getenv("STRIPE_TAX_CODE", "txcd_10103000")
 
     # PayPal (overseas payment)
     Config.PAYPAL_CLIENT_ID = os.getenv("PAYPAL_CLIENT_ID", "")

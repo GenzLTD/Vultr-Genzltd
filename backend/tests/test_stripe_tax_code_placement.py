@@ -27,14 +27,14 @@ def _capture(monkeypatch):
 def test_subscription_tax_code_sits_on_product_data(monkeypatch):
     seen = _capture(monkeypatch)
     StripeProvider().create_checkout(
-        config={"STRIPE_SECRET_KEY": "sk_test_x", "STRIPE_TAX_CODE": "txcd_30040001"},
+        config={"STRIPE_SECRET_KEY": "sk_test_x", "STRIPE_TAX_CODE": "txcd_10103000"},
         out_trade_no="M1",
         tier="supporter",
         amount=1.99,
         mode="subscription",
     )
     data = seen["data"]
-    assert data["line_items[0][price_data][product_data][tax_code]"] == "txcd_30040001"
+    assert data["line_items[0][price_data][product_data][tax_code]"] == "txcd_10103000"
     assert "line_items[0][price_data][tax_code]" not in data
     assert "line_items[0][tax_code]" not in data
     assert data["automatic_tax[enabled]"] == "true"
@@ -50,14 +50,14 @@ def test_payment_tax_code_sits_on_product_data(monkeypatch):
         mode="payment",
     )
     data = seen["data"]
-    assert data["line_items[0][price_data][product_data][tax_code]"] == "txcd_30040001"
+    assert data["line_items[0][price_data][product_data][tax_code]"] == "txcd_10103000"
     assert "line_items[0][tax_code]" not in data
 
 
 def test_subscription_price_id_does_not_send_inline_tax_code(monkeypatch):
     seen = _capture(monkeypatch)
     StripeProvider().create_checkout(
-        config={"STRIPE_SECRET_KEY": "sk_test_x", "STRIPE_TAX_CODE": "txcd_30040001"},
+        config={"STRIPE_SECRET_KEY": "sk_test_x", "STRIPE_TAX_CODE": "txcd_10103000"},
         out_trade_no="M2",
         tier="pro",
         amount=5.99,
