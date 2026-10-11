@@ -17,9 +17,11 @@
 #                  ▼
 #               deploy  8 步串行
 #
-#   现在还不能打 tag 部署：旧云主机服务仍在跑（overseas-* rsync 仍可能盖回 0.0.0.0）。
+#   部署门已开：vars.DEPLOY_ENABLED 已由 looma-zervi 海外部署 CI 有意置为 true，
+#   故 push tag stack-v* 即真实部署到 Vultr SG（见 vars.DEPLOY_HOST），且无审批拦截。
+#   旧注「现在还不能打 tag 部署 / overseas-* rsync 可能盖回 0.0.0.0 / 禁止打开」
+#   系旧项目残留，已不适用（2026-10-11 澄清）。
 #   tspace 源码已在 frontend/packages/saas，saas-build 会打出同源 artifact。
-#   vars.DEPLOY_ENABLED 保持非 true。禁止为了「试一下」打开。
 #
 #   发版纪律：先 push 分支，再单独 push tag，避免 Actions 列表双记录。
 # =============================================================

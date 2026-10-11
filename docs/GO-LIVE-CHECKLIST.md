@@ -25,15 +25,21 @@
 | # | 项 | 位置 | 不做的后果 |
 |---|---|---|---|
 | 1 | `PAYMENT_STUB_MODE=false` | 机器 `backend/.env`（`bootstrap-env.sh` 已设） | 默认值是 **true**；不设则 `POST /v1/membership/subscribe` 直接 400 `stub_mode`，收银台根本不开 |
-| 2 | `STRIPE_SECRET_KEY` = live key | GitHub secret `STRIPE_SECRET_KEY` | 空或 test key → `payment_not_configured` 503 |
-| 3 | `STRIPE_WEBHOOK_SECRET` = live `whsec` | GitHub secret `STRIPE_WEBHOOK_SECRET` | 与 Dashboard 的 endpoint 不匹配 → 验签失败，订阅永不激活 |
+| 2 | `STRIPE_SECRET_KEY` = live key | GitHub secret `ENV_STRIPE_SECRET_KEY` | 空或 test key → `payment_not_configured` 503 |
+| 3 | `STRIPE_WEBHOOK_SECRET` = live `whsec` | GitHub secret `ENV_STRIPE_WEBHOOK_SECRET` | 与 Dashboard 的 endpoint 不匹配 → 验签失败，订阅永不激活 |
 | 4 | Stripe 账户：KYC 完成、Test→Live 可用 | Stripe Dashboard | 未「激活收款」前无法创建真实收款 |
 | 5 | Stripe Tax 激活 + 税务注册地 | Stripe Dashboard → Tax | 代码侧 `STRIPE_TAX_ENABLED=true` / `tax_code=txcd_30040001` 已默认开，但**没有注册地就不会实际计税** |
 | 6 | Billing Portal 打开「取消订阅」 | Stripe Dashboard → Billing → Customer portal | 代码只负责开会话；不开则 Portal 里取消不了，`POST /v1/membership/portal` 形同虚设 |
 | 7 | `MEMBERSHIP_PORTAL_RETURN_HOSTS` | 机器 env | 前后端不同源时 Portal 回跳被拒 → 400 `invalid_return_url` |
-| 8 | `OPENAI_API_KEY` | GitHub secret `OPENAI_API_KEY` | 海外区 `deepseek` 被出境守卫剔除，见 §2 |
+| 8 | `OPENAI_API_KEY` | GitHub secret `ENV_OPENAI_API_KEY` | 海外区 `deepseek` 被出境守卫剔除，见 §2 |
 | 9 | `vars.DEPLOY_ENABLED=true` | GitHub repo variables | 不打开则 deploy 永远跳过 |
 | 10 | 打 tag `stack-vX.Y.Z` | git（先 push 分支，再单独 push tag） | `deploy.yml` 只认 `stack-v*` |
+
+> **命名坑（别照 env 名建 secret）**：GitHub secret 名带 `ENV_` 前缀——`deploy.yml`
+> 就是这么引用的（`secrets.ENV_STRIPE_SECRET_KEY`、`secrets.ENV_OPENAI_API_KEY`）。
+> 而 `bootstrap-env.sh` 写到机器 `backend/.env` 的键名**不带**前缀
+> （`STRIPE_SECRET_KEY` / `OPENAI_API_KEY`）。少写 `ENV_` 会**静默注入为空**，
+> 不报错，只表现为功能不可用。
 
 **关于 Price ID**：会员订阅走的是 `price_data`（金额内联，取契约
 `backend/contracts/payment.v1.json` 的 `price_monthly`），**不需要**预先在 Stripe
