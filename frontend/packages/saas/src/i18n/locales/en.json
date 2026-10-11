@@ -38,9 +38,28 @@
     "resume": "Resume Optimizer",
     "reports": "Growth Reports",
     "consent": "Privacy & Consent",
+    "account": "Account & data",
     "trust": "Trust Profile",
     "membership": "Membership",
     "admin": "Admin Panel"
+  },
+  "accountData": {
+    "title": "Account & data",
+    "subtitle": "Download the personal data held for this account, or delete the account permanently. Deletion cannot be undone.",
+    "exportTitle": "Export my data",
+    "exportHint": "Download this account's personal data as JSON. Password hashes are not included.",
+    "includeAudit": "Include audit records",
+    "export": "Download JSON",
+    "exporting": "Exporting…",
+    "exportDone": "Download started",
+    "exportFailed": "Export failed. Please try again.",
+    "deleteTitle": "Delete account",
+    "deleteHint": "This cannot be undone. If the account has paid orders, deletion is refused until those are resolved.",
+    "confirmLabel": "Type DELETE to confirm",
+    "delete": "Delete permanently",
+    "deleting": "Deleting…",
+    "deleteFailed": "Could not delete the account. Please try again.",
+    "paidOrders": "Related orders: {{orders}}"
   },
   "trust": {
     "title": "My Trust Profile",

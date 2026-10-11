@@ -3,6 +3,7 @@
  * Three primary tiers for the jobseeker path + other scopes.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   CONSENT_PACKAGES,
   CONSENT_PRIMARY_TIERS,
@@ -206,6 +207,11 @@ export default function ConsentSettings() {
       >
         刷新状态
       </button>
+      <p className="text-xs mt-4" style={{ color: "var(--color-text-muted)" }}>
+        <Link to="/settings/account" style={{ color: "var(--color-primary)" }}>
+          导出我的数据 / 注销账号
+        </Link>
+      </p>
     </div>
   );
 }

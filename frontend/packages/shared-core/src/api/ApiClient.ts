@@ -117,6 +117,8 @@ export interface RequestOptions {
   headers?: Record<string, string>;
   params?: Record<string, any>;
   timeout?: number;
+  /** JSON body. DELETE /v1/account 需要 `{ confirm: "DELETE" }`。 */
+  body?: unknown;
 }
 
 function buildQueryString(params?: Record<string, any>): string {
@@ -285,7 +287,7 @@ export class ApiClient {
   }
 
   async delete<T = any>(url: string, params?: Record<string, any>, options?: RequestOptions): Promise<T> {
-    return this.request<T>("DELETE", url, undefined, { ...options, params });
+    return this.request<T>("DELETE", url, options?.body, { ...options, params });
   }
 
   /**
