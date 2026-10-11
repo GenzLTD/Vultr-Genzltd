@@ -128,6 +128,10 @@ class Config:
     STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
     STRIPE_CURRENCY = os.getenv("STRIPE_CURRENCY", "USD")
 
+    # Stripe Tax（香港主体 YEDALL LIMITED 代算代缴）
+    STRIPE_TAX_ENABLED = os.getenv("STRIPE_TAX_ENABLED", "true")
+    STRIPE_TAX_CODE = os.getenv("STRIPE_TAX_CODE", "txcd_30040001")
+
     # PayPal (overseas payment)
     PAYPAL_CLIENT_ID = os.getenv("PAYPAL_CLIENT_ID", "")
     PAYPAL_CLIENT_SECRET = os.getenv("PAYPAL_CLIENT_SECRET", "")
@@ -278,6 +282,10 @@ def _refresh_config():
     Config.STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
     Config.STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
     Config.STRIPE_CURRENCY = os.getenv("STRIPE_CURRENCY", "USD")
+
+    # Stripe Tax（香港主体 YEDALL LIMITED 代算代缴）
+    Config.STRIPE_TAX_ENABLED = os.getenv("STRIPE_TAX_ENABLED", "true")
+    Config.STRIPE_TAX_CODE = os.getenv("STRIPE_TAX_CODE", "txcd_30040001")
 
     # PayPal (overseas payment)
     Config.PAYPAL_CLIENT_ID = os.getenv("PAYPAL_CLIENT_ID", "")

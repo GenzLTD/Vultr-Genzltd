@@ -48,6 +48,7 @@ export default function Sidebar() {
     const items: NavItem[] = [
       { path: "/", labelKey: "nav.dashboard", icon: "◉" },
       { path: "/trust", labelKey: "nav.trust", icon: "✦" },
+      { path: "/subscribe", labelKey: "nav.membership", icon: "✪", mainlandHidden: true },
       { path: "/query", labelKey: "nav.query", icon: "◈" },
       { path: "/poetry", labelKey: "nav.poetry", icon: "◇" },
       { path: "/poetry/challenge", labelKey: "nav.challenge", icon: "✧", mainlandHidden: true },

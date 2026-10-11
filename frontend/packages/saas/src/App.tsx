@@ -32,6 +32,7 @@ import Jobs from "./features/hr/Jobs";
 import Resume from "./features/hr/Resume";
 import Reports from "./features/reports/Reports";
 import Pricing from "./features/pricing/Pricing";
+import Subscription from "./features/membership/Subscription";
 import CandidateShare from "./features/candidates/CandidateShare";
 import Candidates from "./features/candidates/Candidates";
 import CandidateDetail from "./features/candidates/CandidateDetail";
@@ -82,6 +83,7 @@ export default function App() {
           <Route element={<AppLayout />}>
             <Route path="/" element={<FeatureGuard><Dashboard /></FeatureGuard>} />
             <Route path="/pricing" element={<FeatureGuard><Pricing /></FeatureGuard>} />
+            <Route path="/subscribe" element={<FeatureGuard><Subscription /></FeatureGuard>} />
             <Route path="/verify" element={<FeatureGuard><TrustVerify /></FeatureGuard>} />
             <Route path="/candidate/share/:code" element={<FeatureGuard><CandidateShare /></FeatureGuard>} />
           </Route>

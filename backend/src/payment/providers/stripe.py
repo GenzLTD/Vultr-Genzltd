@@ -90,6 +90,18 @@ class StripeProvider(BaseProvider):
                 data["line_items[0][price_data][recurring][interval]"] = "month"
                 data["line_items[0][price_data][product_data][name]"] = plan_name
 
+        # ── Stripe Tax（香港主体 YEDALL LIMITED — Stripe Tax 自动算税并代缴）──
+        # 对所有 Stripe 结账（含原 payment 链路）自动生效；不传开关则默认开启。
+        tax_enabled = str(config.get("STRIPE_TAX_ENABLED", "true")).lower() in ("1", "true", "yes", "on")
+        if tax_enabled:
+            data["automatic_tax[enabled]"] = "true"
+            data["tax_id_collection[enabled]"] = "true"
+            tax_code = config.get("STRIPE_TAX_CODE", "txcd_30040001")
+            if mode == "payment":
+                data["line_items[0][tax_code]"] = tax_code
+            elif mode == "subscription":
+                data["line_items[0][price_data][tax_code]"] = tax_code
+
         result = self._api_request("POST", "/checkout/sessions", secret_key, data)
 
         return CheckoutResult(
