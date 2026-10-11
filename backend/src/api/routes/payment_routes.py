@@ -58,6 +58,8 @@ from src.payment.stripe_pay import (
 # Multi-provider system
 from src.payment.providers import get_provider, list_configured_providers
 from src.payment.providers.base import CheckoutResult, WebhookResult
+# Unified settlement path (shared with the membership webhook)
+from src.payment.settlement import settle_payment
 
 payment_bp = Blueprint("payment", __name__)
 
@@ -567,40 +569,13 @@ def wechat_pay_notify_simulate():
 
 def _process_payment_completed(db, out_trade_no: str, transaction_id: str,
                                 provider_name: str) -> dict | None:
-    """Shared webhook handler: mark order paid + upgrade tier + create subscription.
+    """Backward-compatible alias — delegates to src.payment.settlement.settle_payment.
 
-    Used by Stripe, PayPal, Airwallex, and future providers.
-    Returns the paid order dict or None (idempotent skip).
+    Used by Stripe, PayPal, Airwallex, and future providers. Keeping this thin
+    wrapper guarantees payment webhooks and the new membership webhook settle
+    through the exact same path (no logic drift).
     """
-    order = db.get_order_by_out_trade_no(out_trade_no)
-    if not order:
-        current_app.logger.error(
-            f"[{provider_name}] Order not found: {out_trade_no}"
-        )
-        return None
-
-    if order["status"] == "paid":
-        return None  # idempotent
-
-    paid_order = db.mark_order_paid(out_trade_no, transaction_id)
-    if not paid_order:
-        return None
-
-    user_id = paid_order["user_id"]
-    tier = paid_order["tier"]
-    plan_id = paid_order["plan_id"]
-
-    db.update_user_tier(user_id, tier)
-
-    from datetime import datetime, timedelta
-    expires = (datetime.now() + timedelta(days=30)).isoformat()
-    db.upsert_subscription(user_id, tier, plan_id, expires, auto_renew=False)
-
-    current_app.logger.info(
-        f"[{provider_name}] Payment confirmed: user={user_id} tier={tier} "
-        f"order={out_trade_no} txn={transaction_id}"
-    )
-    return paid_order
+    return settle_payment(db, out_trade_no, transaction_id, provider_name)
 
 
 @payment_bp.route("/payment/providers", methods=["GET"])

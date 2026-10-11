@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Looma Overseas Membership Contract v1",
+  "version": "1.0.0",
+  "authority": "GenzLTD/gfcc",
+  "description": "海外独立站（诗词门户 / PlanetX 海外版）虚拟会员 SaaS 订阅产品契约。价格单一真相源见 contracts/payment.v1.json（US 区，YeDall 主体 supporter $1.99 / pro $5.99）。本协议只声明权益(entitlements)与税务(tax)；协议权威 = contracts/gfcc（GenzLTD/gfcc）。",
+  "billing_entity": "YEDALL LIMITED",
+  "billing_region": "US",
+  "price_source": "backend/contracts/payment.v1.json#/plans (region=US)",
+  "tax": {
+    "engine": "stripe_tax",
+    "automatic_tax_enabled": true,
+    "tax_behavior": "exclusive",
+    "tax_code": "txcd_30040001",
+    "tax_id_collection": true,
+    "note": "香港主体 YEDALL LIMITED 通过 Stripe Tax 自动计算并代缴：欧盟 VAT、英国 VAT、美国销售税、澳洲 GST。税前价（exclusive），结账时按买家所在地加算。"
+  },
+  "entitlements": {
+    "free": {
+      "name": "Free",
+      "features": [
+        "30 AI chats per day",
+        "Basic job matching",
+        "3 resume parses per day"
+      ],
+      "quota": {
+        "ai_chats_per_day": 30,
+        "resume_parses_per_day": 3
+      }
+    },
+    "supporter": {
+      "name": "Supporter",
+      "features": [
+        "100 AI chats per day",
+        "Advanced job matching",
+        "Unlimited resume parsing",
+        "PlanetX supporter badge"
+      ],
+      "quota": {
+        "ai_chats_per_day": 100,
+        "resume_parses_per_day": 999999
+      }
+    },
+    "pro": {
+      "name": "Pro",
+      "features": [
+        "Unlimited AI chats",
+        "Full job matching",
+        "Unlimited resume parsing",
+        "Advanced analytics",
+        "Priority support"
+      ],
+      "quota": {
+        "ai_chats_per_day": 999999,
+        "resume_parses_per_day": 999999
+      }
+    }
+  },
+  "endpoints": {
+    "plans": { "method": "GET", "path": "/v1/membership/plans", "auth": "none", "status": "implemented" },
+    "subscribe": { "method": "POST", "path": "/v1/membership/subscribe", "auth": "required", "status": "implemented" },
+    "status": { "method": "GET", "path": "/v1/membership/status", "auth": "required", "status": "implemented" },
+    "webhook": { "method": "POST", "path": "/v1/membership/webhook/stripe", "auth": "none", "status": "implemented" }
+  }
+}

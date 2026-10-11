@@ -54,6 +54,8 @@ set_kv QCC_ENABLED true
 set_kv QCC_MCP_BASE_URL "${QCC_MCP_BASE_URL:-http://1.14.202.161:8998/mcp}"
 set_kv STRIPE_SUCCESS_URL https://tspace.genz.ltd/pricing?status=success
 set_kv STRIPE_CANCEL_URL https://tspace.genz.ltd/pricing?status=cancel
+set_kv STRIPE_TAX_ENABLED true
+set_kv STRIPE_TAX_CODE txcd_30040001
 
 # ---- 仅缺失时写（密钥；机器是权威）----
 seed_kv JWT_SECRET "${JWT_SECRET:-}"

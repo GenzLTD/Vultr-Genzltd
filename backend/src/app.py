@@ -24,7 +24,7 @@ _PRODUCT_LINES = (
         "reports", "credit", "compliance", "trust", "timeline", "social",
     )),
     ("harmonyos", "HarmonyOS 元服务", ("payment/huawei", "push/huawei", "card")),
-    ("shared", "通用 · 共享", ("auth", "ask", "quota", "payment", "referral", "analytics", "poetry")),
+    ("shared", "通用 · 共享", ("auth", "ask", "quota", "payment", "membership", "referral", "analytics", "poetry")),
     ("system", "系统 · 运维", ("_sys", "admin", "endpoints")),
 )
 
@@ -254,6 +254,7 @@ def create_app(env="development"):
     from src.api.routes.credit_routes import credit_bp
     from src.api.routes.quota_routes import quota_bp
     from src.api.routes.payment_routes import payment_bp
+    from src.api.routes.membership_routes import membership_bp
     from src.api.routes.poetry_routes import poetry_bp
     from src.api.routes.narrative_routes import narrative_bp
     from src.api.routes.compliance_routes import compliance_bp
@@ -284,6 +285,7 @@ def create_app(env="development"):
     app.register_blueprint(compliance_bp, url_prefix="/v1/compliance")
     app.register_blueprint(quota_bp, url_prefix="/v1")
     app.register_blueprint(payment_bp, url_prefix="/v1")
+    app.register_blueprint(membership_bp, url_prefix="/v1/membership")
     app.register_blueprint(poetry_bp, url_prefix="/v1/poetry")
     app.register_blueprint(narrative_bp, url_prefix="/v1/narrative")
     app.register_blueprint(analytics_bp, url_prefix="/v1")
