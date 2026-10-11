@@ -128,6 +128,31 @@ class StripeProvider(BaseProvider):
             },
         )
 
+    # ── Billing Portal ─────────────────────────────────────
+
+    def create_billing_portal_session(
+        self,
+        config: dict[str, Any],
+        customer_id: str,
+        return_url: str = "",
+    ) -> dict[str, Any]:
+        """创建 Stripe Billing Portal 会话，返回 ``{"url", "id"}``。
+
+        取消订阅 / 换卡 / 下载发票都在 Stripe 托管页面完成 —— 比自己为每个
+        地区再造一套取消 UI 更省事，也更容易满足「取消要和订阅一样容易」的
+        监管预期（EU 消费者权利指令 / FTC negative-option 规则）。
+
+        注意：Portal 里具体开放哪些操作（能否取消、能否换套餐）由 Stripe
+        Dashboard 的 Portal 配置决定，代码侧只负责开一个会话。
+        """
+        secret_key = config.get("STRIPE_SECRET_KEY", "")
+        data: dict[str, str] = {"customer": customer_id}
+        if return_url:
+            data["return_url"] = return_url
+
+        result = self._api_request("POST", "/billing_portal/sessions", secret_key, data)
+        return {"url": result.get("url", ""), "id": result.get("id", "")}
+
     # ── Webhook ────────────────────────────────────────────
 
     def verify_webhook(

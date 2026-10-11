@@ -127,6 +127,8 @@ class Config:
     STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
     STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
     STRIPE_CURRENCY = os.getenv("STRIPE_CURRENCY", "USD")
+    # Billing Portal 回跳域名白名单（逗号分隔）；空 = 只信任请求自身 host
+    MEMBERSHIP_PORTAL_RETURN_HOSTS = os.getenv("MEMBERSHIP_PORTAL_RETURN_HOSTS", "")
 
     # Stripe Tax（香港主体 YEDALL LIMITED 代算代缴）
     STRIPE_TAX_ENABLED = os.getenv("STRIPE_TAX_ENABLED", "true")
@@ -282,6 +284,7 @@ def _refresh_config():
     Config.STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
     Config.STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
     Config.STRIPE_CURRENCY = os.getenv("STRIPE_CURRENCY", "USD")
+    Config.MEMBERSHIP_PORTAL_RETURN_HOSTS = os.getenv("MEMBERSHIP_PORTAL_RETURN_HOSTS", "")
 
     # Stripe Tax（香港主体 YEDALL LIMITED 代算代缴）
     Config.STRIPE_TAX_ENABLED = os.getenv("STRIPE_TAX_ENABLED", "true")

@@ -285,7 +285,11 @@ def create_app(env="development"):
     app.register_blueprint(compliance_bp, url_prefix="/v1/compliance")
     app.register_blueprint(quota_bp, url_prefix="/v1")
     app.register_blueprint(payment_bp, url_prefix="/v1")
-    app.register_blueprint(membership_bp, url_prefix="/v1/membership")
+    # 蓝图内路由已自带 /membership 前缀（见 membership_routes.py），
+    # 这里再叠一层 /v1/membership 会拼成 /v1/membership/membership/*，
+    # 而前端（Subscription.tsx）与 nginx（location /v1/membership/webhook/）
+    # 用的都是 /v1/membership/*。此前会员端点实际不可达，此处对齐为 /v1。
+    app.register_blueprint(membership_bp, url_prefix="/v1")
     app.register_blueprint(poetry_bp, url_prefix="/v1/poetry")
     app.register_blueprint(narrative_bp, url_prefix="/v1/narrative")
     app.register_blueprint(analytics_bp, url_prefix="/v1")

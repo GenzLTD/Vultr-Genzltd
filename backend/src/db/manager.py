@@ -4079,6 +4079,35 @@ END;
             ).fetchone()
         return dict(row) if row else None
 
+    def find_stripe_refs_for_user(self, user_id: str) -> dict:
+        """取该用户最近一笔带 Stripe 引用的订单，返回其 customer / subscription id。
+
+        自助管理订阅（Billing Portal / 取消 / 换卡）必须先知道"在 Stripe 那边
+        我是谁"。我们不单独存 customer 表，而是把 id 留痕在订单 metadata 上
+        （见 settlement._remember_provider_refs）；这里按 user_id 反查最近一笔，
+        换绑或重复购买后以最新为准。
+
+        无留痕时返回 ``{}`` —— 调用方据此给出"没有可管理的订阅"，而不是伪造。
+        """
+        if not user_id:
+            return {}
+        with self.get_conn() as conn:
+            row = conn.execute(
+                """SELECT json_extract(metadata_json, '$.stripe_customer_id') AS customer_id,
+                          json_extract(metadata_json, '$.stripe_subscription_id') AS subscription_id
+                   FROM orders
+                   WHERE user_id = ?
+                     AND json_extract(metadata_json, '$.stripe_customer_id') IS NOT NULL
+                   ORDER BY created_at DESC LIMIT 1""",
+                (user_id,),
+            ).fetchone()
+        if not row:
+            return {}
+        return {
+            "stripe_customer_id": row["customer_id"] or "",
+            "stripe_subscription_id": row["subscription_id"] or "",
+        }
+
     def mark_order_paid(self, out_trade_no: str, transaction_id: str) -> dict | None:
         with self.get_conn() as conn:
             conn.execute(
