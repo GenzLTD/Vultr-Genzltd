@@ -6,7 +6,7 @@
 #     （那边的 compose 仍是 0.0.0.0，nginx 是产品仓历史件）。
 #
 #   git tag stack-vX.Y.Z（或 workflow_dispatch）
-#           │  concurrency: deploy-stack + cancel-in-progress
+#           │  concurrency: 门禁按 ref 隔离(stack-gates-<ref>) / 部署全局串行(deploy-stack)
 #           ├──────────────┬──────────────┐
 #           ▼              ▼
 #     backend-test     saas-build
@@ -43,8 +43,20 @@ on:
 permissions:
   contents: read
 
+# 门禁按 ref 隔离，部署全局串行 —— 两层，不要合成一层。
+#
+#   旧写法 group: deploy-stack / cancel-in-progress: true 是 workflow 级，
+#   所有 ref（每个 PR / main push / 每个 tag）**共用同一组**，于是并发到达
+#   的运行会被直接掐掉，结论记成 cancelled。实测已被取消 4 次：
+#     38136335211 / 38136502323（merge #3 / #8 后的 main push）
+#     38136455654（PR #8）、38141436239（workflow_dispatch）
+#   PR 门禁被取消尤其危险 —— 看起来"跑过了"，实际没有任何断言执行过。
+#
+#   按 ref 隔离后各 PR 互不干扰。但**部署不能跟着一起隔离**：两个 tag 并发
+#   会得到两次并行部署，中途互相覆盖 → 留下半套栈。所以 deploy job 单独用
+#   一个全局组，且 cancel-in-progress: false（排队等待，不打断进行中的部署）。
 concurrency:
-  group: deploy-stack
+  group: stack-gates-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -144,6 +156,11 @@ jobs:
   deploy:
     name: Deploy to Vultr SG
     runs-on: ubuntu-latest
+    # 部署全局串行且**不可取消**：两个 tag 若并行执行会互相覆盖，留下半套栈；
+    # 所以这里刻意不按 ref 隔离（与上面的门禁组相反），排队而非取消。
+    concurrency:
+      group: deploy-stack
+      cancel-in-progress: false
     needs: [backend-test, saas-build]
     environment: production
     if: >-
