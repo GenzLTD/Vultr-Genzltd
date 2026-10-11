@@ -103,15 +103,15 @@ class StripeProvider(BaseProvider):
 
         # ── Stripe Tax（香港主体 YEDALL LIMITED — Stripe Tax 自动算税并代缴）──
         # 对所有 Stripe 结账（含原 payment 链路）自动生效；不传开关则默认开启。
+        # 税码属于内联 Product，不在 Price 或 line item 上。已有 Price ID 的
+        # 订阅沿用该 Price 上的 Product，不再塞 price_data。
         tax_enabled = str(config.get("STRIPE_TAX_ENABLED", "true")).lower() in ("1", "true", "yes", "on")
         if tax_enabled:
             data["automatic_tax[enabled]"] = "true"
             data["tax_id_collection[enabled]"] = "true"
-            tax_code = config.get("STRIPE_TAX_CODE", "txcd_30040001")
-            if mode == "payment":
-                data["line_items[0][tax_code]"] = tax_code
-            elif mode == "subscription":
-                data["line_items[0][price_data][tax_code]"] = tax_code
+            if "line_items[0][price_data][currency]" in data:
+                tax_code = config.get("STRIPE_TAX_CODE", "txcd_30040001")
+                data["line_items[0][price_data][product_data][tax_code]"] = tax_code
 
         result = self._api_request("POST", "/checkout/sessions", secret_key, data)
 
