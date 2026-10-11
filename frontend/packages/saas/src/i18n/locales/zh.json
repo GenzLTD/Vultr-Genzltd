@@ -38,9 +38,28 @@
     "resume": "简历解析",
     "reports": "报告中心",
     "consent": "隐私授权",
+    "account": "账号与数据",
     "trust": "信任档案",
     "membership": "海外会员",
     "admin": "管理看板"
+  },
+  "accountData": {
+    "title": "账号与数据",
+    "subtitle": "你可以下载这份账号里的个人数据，或永久注销。注销后无法恢复。",
+    "exportTitle": "导出我的数据",
+    "exportHint": "下载当前账号的个人数据（JSON）。密码摘要不会包含在内。",
+    "includeAudit": "同时包含审计记录",
+    "export": "下载 JSON",
+    "exporting": "导出中…",
+    "exportDone": "已开始下载",
+    "exportFailed": "导出失败，请稍后重试",
+    "deleteTitle": "注销账号",
+    "deleteHint": "此操作不可撤销。若账号下有已支付订单，注销会被拒绝，需先处理退款。",
+    "confirmLabel": "输入 DELETE 以确认",
+    "delete": "永久注销",
+    "deleting": "注销中…",
+    "deleteFailed": "注销失败，请稍后重试",
+    "paidOrders": "相关订单：{{orders}}"
   },
   "trust": {
     "title": "我的信任档案",

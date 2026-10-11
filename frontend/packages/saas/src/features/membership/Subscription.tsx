@@ -108,6 +108,7 @@ export default function Subscription() {
   const [billingEntity, setBillingEntity] = useState("YEDALL LIMITED");
   const [loadingPlans, setLoadingPlans] = useState(true);
   const [subscribingTier, setSubscribingTier] = useState<string | null>(null);
+  const [openingPortal, setOpeningPortal] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -207,6 +208,44 @@ export default function Subscription() {
       }
     } finally {
       setSubscribingTier(null);
+    }
+  };
+
+  const handleManage = async () => {
+    if (!isAuthenticated) {
+      navigate("/login");
+      return;
+    }
+    setOpeningPortal(true);
+    setMessage(null);
+    try {
+      const client = createSaasApiClient();
+      const base = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+      const session = await client.post<{ url: string }>("/v1/membership/portal", {
+        return_url: `${window.location.origin}${base}/subscribe`,
+      });
+      window.location.href = session.url;
+    } catch (err: any) {
+      const status = err?.status;
+      const code = err?.body?.error;
+      if (status === 404 || code === "no_billing_customer") {
+        setMessage(
+          IS_OVERSEAS
+            ? "No Stripe subscription to manage yet. Subscribe first."
+            : "还没有可管理的 Stripe 订阅，请先订阅。",
+        );
+      } else if (status === 400 || code === "invalid_return_url") {
+        setMessage(
+          IS_OVERSEAS
+            ? "Return address was rejected. Add this site to MEMBERSHIP_PORTAL_RETURN_HOSTS."
+            : "回跳地址未通过校验。请把本站域名写入 MEMBERSHIP_PORTAL_RETURN_HOSTS。",
+        );
+      } else if (status === 503) {
+        setMessage(IS_OVERSEAS ? "Payment not configured. Please contact support." : "支付未配置，请联系管理员开通");
+      } else {
+        setMessage(IS_OVERSEAS ? "Could not open subscription management. Please try again." : "暂时无法打开订阅管理，请稍后重试");
+      }
+      setOpeningPortal(false);
     }
   };
 
@@ -313,7 +352,19 @@ export default function Subscription() {
             {tax.note}
           </p>
         )}
-        {!isAuthenticated && (
+        {isAuthenticated ? (
+          <button
+            type="button"
+            onClick={() => void handleManage()}
+            disabled={openingPortal}
+            className="text-sm px-4 py-2 rounded-lg font-medium text-white disabled:opacity-60"
+            style={{ backgroundColor: "var(--color-primary)" }}
+          >
+            {openingPortal
+              ? (IS_OVERSEAS ? "Opening…" : "打开中…")
+              : (IS_OVERSEAS ? "Manage subscription" : "管理订阅")}
+          </button>
+        ) : (
           <Link to="/register" className="text-sm" style={{ color: "var(--color-primary)" }}>
             {IS_OVERSEAS ? "No account yet? Sign up →" : "还没有账号？立即注册 →"}
           </Link>

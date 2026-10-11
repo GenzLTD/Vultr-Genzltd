@@ -28,6 +28,7 @@ const NAV_ITEMS: NavItem[] = [
   { path: "/reports", label: "报表", icon: "📈" },
   { path: "/pricing", label: "定价", icon: "💎" },
   { path: "/settings/consent", label: "隐私设置", icon: "🔒" },
+  { path: "/settings/account", label: "账号与数据", icon: "📦" },
 ];
 
 interface MobileDrawerProps {

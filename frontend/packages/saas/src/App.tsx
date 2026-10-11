@@ -37,6 +37,7 @@ import CandidateShare from "./features/candidates/CandidateShare";
 import Candidates from "./features/candidates/Candidates";
 import CandidateDetail from "./features/candidates/CandidateDetail";
 import ConsentSettings from "./features/settings/ConsentSettings";
+import AccountDataSettings from "./features/settings/AccountDataSettings";
 import TrustProfile from "./features/trust/TrustProfile";
 import TrustVerify from "./features/trust/TrustVerify";
 import AdminDashboard from "./features/admin/AdminDashboard";
@@ -101,6 +102,7 @@ export default function App() {
               <Route path="/candidates" element={<FeatureGuard><Candidates /></FeatureGuard>} />
               <Route path="/candidates/:id" element={<FeatureGuard><CandidateDetail /></FeatureGuard>} />
               <Route path="/settings/consent" element={<FeatureGuard><ConsentSettings /></FeatureGuard>} />
+              <Route path="/settings/account" element={<FeatureGuard><AccountDataSettings /></FeatureGuard>} />
               <Route element={<SaasAdminGuard />}>
                 <Route path="/admin" element={<FeatureGuard><AdminDashboard /></FeatureGuard>} />
               </Route>

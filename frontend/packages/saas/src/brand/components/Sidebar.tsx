@@ -62,6 +62,7 @@ export default function Sidebar() {
       { path: "/resume", labelKey: "nav.resume", icon: "◈" },
       { path: "/reports", labelKey: "nav.reports", icon: "◆" },
       { path: "/settings/consent", labelKey: "nav.consent", icon: "🛡" },
+      { path: "/settings/account", labelKey: "nav.account", icon: "☰" },
     ];
     if (isAdmin(user?.role)) {
       items.push({ path: "/admin", labelKey: "nav.admin", icon: "⚙" });
