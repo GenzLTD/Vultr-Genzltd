@@ -11,9 +11,9 @@
     "engine": "stripe_tax",
     "automatic_tax_enabled": true,
     "tax_behavior": "exclusive",
-    "tax_code": "txcd_30040001",
+    "tax_code": "txcd_10103000",
     "tax_id_collection": true,
-    "note": "香港主体 YEDALL LIMITED 通过 Stripe Tax 自动计算并代缴：欧盟 VAT、英国 VAT、美国销售税、澳洲 GST。税前价（exclusive），结账时按买家所在地加算。"
+    "note": "香港主体 YEDALL LIMITED 通过 Stripe Tax 自动计算并代缴：欧盟 VAT、英国 VAT、美国销售税、澳洲 GST。税前价（exclusive），结账时按买家所在地加算。税码 txcd_10103000 = Stripe 官方「Software as a service (SaaS) - personal use」（买家为个人消费者；business use 为 txcd_10103001）。曾误用 txcd_30040001 —— 该码属 txcd_3xxxxxx 物理商品段，Stripe 视为无效，结账建会话直接报错。"
   },
   "entitlements": {
     "free": {

@@ -70,7 +70,7 @@ set_kv QCC_ENABLED "$QCC_ENABLED_AUTO"
 set_kv STRIPE_SUCCESS_URL https://tspace.genz.ltd/pricing?status=success
 set_kv STRIPE_CANCEL_URL https://tspace.genz.ltd/pricing?status=cancel
 set_kv STRIPE_TAX_ENABLED true
-set_kv STRIPE_TAX_CODE txcd_30040001
+set_kv STRIPE_TAX_CODE txcd_10103000
 
 # ---- 仅缺失时写（密钥；机器是权威）----
 seed_kv JWT_SECRET "${JWT_SECRET:-}"

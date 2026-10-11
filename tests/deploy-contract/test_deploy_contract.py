@@ -241,6 +241,36 @@ class TestGatesAndDeployConcurrency:
         )
 
 
+class TestSaasTaxCodeConfig:
+    """税码配置意图锁：SaaS 必须配数字产品段税码（txcd_1xxxxxxx）。
+
+    历史教训：bootstrap-env.sh / .env.example 曾写 txcd_30040001
+    （物理商品段），Stripe 对数字 SaaS 视为无效，建结账会话直接报错。
+    官方定义见 docs.stripe.com/tax/tax-codes：
+    txcd_10103000 = "Software as a service (SaaS) - personal use"。
+    """
+
+    SAAS_PERSONAL_USE = "txcd_10103000"
+
+    def test_bootstrap_env_writes_saas_tax_code(self):
+        text = BOOTSTRAP_ENV.read_text(encoding="utf-8")
+        assert f"set_kv STRIPE_TAX_CODE {self.SAAS_PERSONAL_USE}" in text, (
+            "bootstrap-env.sh 必须写入官方 SaaS - personal use 税码"
+        )
+
+    def test_env_example_declares_saas_tax_code(self):
+        text = ENV_EXAMPLE.read_text(encoding="utf-8")
+        assert f"STRIPE_TAX_CODE={self.SAAS_PERSONAL_USE}" in text
+
+    def test_no_physical_goods_tax_code_anywhere_in_pipeline(self):
+        for path in (BOOTSTRAP_ENV, ENV_EXAMPLE):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if "STRIPE_TAX_CODE" in line and "txcd_" in line:
+                    assert "txcd_3" not in line, (
+                        f"{path.name} 的税码落在物理商品段（txcd_3xxxxxx）: {line}"
+                    )
+
+
 if __name__ == "__main__":
     import sys
 

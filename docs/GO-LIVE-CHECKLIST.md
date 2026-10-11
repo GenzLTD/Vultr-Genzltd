@@ -28,7 +28,7 @@
 | 2 | `STRIPE_SECRET_KEY` = live key | GitHub secret `STRIPE_SECRET_KEY` | 空或 test key → `payment_not_configured` 503 |
 | 3 | `STRIPE_WEBHOOK_SECRET` = live `whsec` | GitHub secret `STRIPE_WEBHOOK_SECRET` | 与 Dashboard 的 endpoint 不匹配 → 验签失败，订阅永不激活 |
 | 4 | Stripe 账户：KYC 完成、Test→Live 可用 | Stripe Dashboard | 未「激活收款」前无法创建真实收款 |
-| 5 | Stripe Tax 激活 + 税务注册地 | Stripe Dashboard → Tax | 代码侧 `STRIPE_TAX_ENABLED=true` / `tax_code=txcd_30040001` 已默认开，但**没有注册地就不会实际计税** |
+| 5 | Stripe Tax 激活 + 税务注册地 | Stripe Dashboard → Tax | 代码侧 `STRIPE_TAX_ENABLED=true` / `tax_code=txcd_10103000` 已默认开，但**没有注册地就不会实际计税** |
 | 6 | Billing Portal 打开「取消订阅」 | Stripe Dashboard → Billing → Customer portal | 代码只负责开会话；不开则 Portal 里取消不了，`POST /v1/membership/portal` 形同虚设 |
 | 7 | `MEMBERSHIP_PORTAL_RETURN_HOSTS` | 机器 env | 前后端不同源时 Portal 回跳被拒 → 400 `invalid_return_url` |
 | 8 | `OPENAI_API_KEY` | GitHub secret `OPENAI_API_KEY` | 海外区 `deepseek` 被出境守卫剔除，见 §2 |
@@ -38,6 +38,25 @@
 **关于 Price ID**：会员订阅走的是 `price_data`（金额内联，取契约
 `backend/contracts/payment.v1.json` 的 `price_monthly`），**不需要**预先在 Stripe
 建 Price 对象。`stripe_price_id` 只在通用 `/v1/payment/checkout` 链路里作为可选覆盖。
+
+### 1.1 Stripe Tax 登记 —— YEDALL 侧要单独做的（与代码无关）
+
+税码已由代码改为 **`txcd_10103000`（SaaS - personal use）**：官方目录确认它是
+「卖给个人的托管 SaaS」唯一正确码。原用的 `txcd_30040001` 属物理商品段
+（txcd_3xxxxxx = 服装/口罩类），对数字 SaaS 无效；且 PR #14 证实税码必须放在
+**内联 Product**（`price_data[product_data][tax_code]`）上，放 Price/line item 上
+Stripe 回 `parameter_unknown`。business use 是 `txcd_10103001`，本项目不涉及。
+
+代码换码只是"申报口径"对了；**没有税务登记，Stripe Tax 对任何辖区都算出 0 税**
+（`not_collecting`）。剩下的登记与验收是 Stripe Dashboard / 税务顾问的事：
+
+| # | 事项 | 谁 | 说明 |
+|---|---|---|---|
+| 1 | 确定登记清单 | 税务顾问 | 按买家所在地定：哪里要登记 VAT / 销售税 / GST（欧盟 OSS、英国 VAT、美国各州 economic nexus、澳洲 GST 各有门槛）。Stripe 只会**代算代缴已登记辖区**，不会替你决定登记义务 |
+| 2 | 把登记录进 Stripe Tax | YEDALL | Dashboard → Tax → Registrations。**美国部分州可由 Stripe 代办注册**；**美国以外经 Taxually 代办**。录入后该辖区才开始实际计税 |
+| 3 | Webhook（live） | YEDALL | Dashboard 建 live endpoint（`/v1/membership/webhook/stripe`），把 live `whsec` 对齐 GitHub secret `ENV_STRIPE_WEBHOOK_SECRET`（§1 第 3 项） |
+| 4 | Portal 打开「取消订阅」 | YEDALL | Dashboard → Billing → Customer portal（§1 第 6 项，代码只负责开会话） |
+| 5 | 一笔真实 $1.99 验收 | YEDALL | supporter 档月付（`payment.v1.json` US 区单一真相源）。验收点见 §4 第 7 条；**重点看发票行**：税码=`txcd_10103000`、按买家地址出现对应税行（登记过的辖区）或 `not_collecting`（未登记） |
 
 ---
 
