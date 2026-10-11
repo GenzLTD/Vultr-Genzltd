@@ -258,6 +258,7 @@ def create_app(env="development"):
     from src.api.routes.poetry_routes import poetry_bp
     from src.api.routes.narrative_routes import narrative_bp
     from src.api.routes.compliance_routes import compliance_bp
+    from src.api.routes.account_routes import account_bp  # 数据主体权利（导出/注销）
     from src.api.routes.analytics_routes import analytics_bp
     from src.api.routes.admin_routes import admin_bp
     from src.api.routes.social_routes import social_bp  # 六度分隔社交图谱
@@ -283,6 +284,7 @@ def create_app(env="development"):
     app.register_blueprint(referral_bp, url_prefix="/v1/referral")
     app.register_blueprint(credit_bp, url_prefix="/v1/credit")
     app.register_blueprint(compliance_bp, url_prefix="/v1/compliance")
+    app.register_blueprint(account_bp, url_prefix="/v1")  # /v1/account, /v1/account/export
     app.register_blueprint(quota_bp, url_prefix="/v1")
     app.register_blueprint(payment_bp, url_prefix="/v1")
     app.register_blueprint(membership_bp, url_prefix="/v1/membership")
