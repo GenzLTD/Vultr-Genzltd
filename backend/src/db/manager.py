@@ -4029,6 +4029,56 @@ END;
             ).fetchone()
         return dict(row) if row else None
 
+    def merge_order_metadata(self, order_id: str, extra: dict) -> bool:
+        """Merge keys into orders.metadata_json without clobbering existing ones."""
+        extra = {k: v for k, v in (extra or {}).items() if v}
+        if not extra:
+            return False
+        with self.get_conn() as conn:
+            row = conn.execute(
+                "SELECT metadata_json FROM orders WHERE id = ?", (order_id,),
+            ).fetchone()
+            if not row:
+                return False
+            try:
+                current = json.loads(row["metadata_json"] or "{}")
+                if not isinstance(current, dict):
+                    current = {}
+            except (TypeError, ValueError):
+                current = {}
+            current.update(extra)
+            conn.execute(
+                "UPDATE orders SET metadata_json = ? WHERE id = ?",
+                (json.dumps(current, ensure_ascii=False), order_id),
+            )
+        return True
+
+    def find_order_by_stripe_subscription(self, subscription_id: str) -> dict | None:
+        """Resolve the originating order from a Stripe subscription id."""
+        if not subscription_id:
+            return None
+        with self.get_conn() as conn:
+            row = conn.execute(
+                """SELECT * FROM orders
+                   WHERE json_extract(metadata_json, '$.stripe_subscription_id') = ?
+                   ORDER BY created_at DESC LIMIT 1""",
+                (subscription_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def find_order_by_stripe_customer(self, customer_id: str) -> dict | None:
+        """Resolve the most recent order from a Stripe customer id."""
+        if not customer_id:
+            return None
+        with self.get_conn() as conn:
+            row = conn.execute(
+                """SELECT * FROM orders
+                   WHERE json_extract(metadata_json, '$.stripe_customer_id') = ?
+                   ORDER BY created_at DESC LIMIT 1""",
+                (customer_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
     def mark_order_paid(self, out_trade_no: str, transaction_id: str) -> dict | None:
         with self.get_conn() as conn:
             conn.execute(
@@ -4083,6 +4133,44 @@ END;
                 "SELECT * FROM subscriptions WHERE user_id = ?", (user_id,),
             ).fetchone()
         return dict(row) if row else None
+
+    def renew_subscription(self, user_id: str, days: int = 30) -> dict | None:
+        """续费：从 max(now, 当前到期时间) 起顺延 days 天。
+
+        以「较晚者」为基准，避免用户提前续费时把已购时长冲掉。
+        仅对已有订阅记录的用户生效（未订阅者返回 None）。
+        """
+        from datetime import datetime, timedelta
+
+        with self.get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM subscriptions WHERE user_id = ?", (user_id,),
+            ).fetchone()
+            if not row:
+                return None
+
+            base = _dt_now()
+            raw = row["expires_at"]
+            if raw:
+                try:
+                    current = datetime.fromisoformat(str(raw))
+                    if current.tzinfo is not None and base.tzinfo is None:
+                        current = current.replace(tzinfo=None)
+                    if current > base:
+                        base = current
+                except ValueError:
+                    pass
+
+            expires = (base + timedelta(days=days)).isoformat()
+            conn.execute(
+                """UPDATE subscriptions SET status = 'active', expires_at = ?,
+                   auto_renew = 1, updated_at = datetime('now') WHERE user_id = ?""",
+                (expires, user_id),
+            )
+            updated = conn.execute(
+                "SELECT * FROM subscriptions WHERE user_id = ?", (user_id,),
+            ).fetchone()
+        return dict(updated) if updated else None
 
     def cancel_subscription(self, user_id: str, at_period_end: bool = False) -> bool:
         with self.get_conn() as conn:
