@@ -8,7 +8,12 @@
 #
 #   本机专属断言：端口收内网（不得出现 0.0.0.0:5200/6379/8000）
 #
+#   业务冒烟（2026-10-12 加）：/health 只证明进程活着，不证明蓝图已注册。
+#   故额外断言 membership 探针、关键模块在 url_map、路由总数下限，以及
+#   /health.git_commit 与本次发布写入的 git_commit.txt 一致。
+#
 #   用法: bash scripts/healthcheck.sh
+#        SMOKE_MIN_ENDPOINTS=150 DEPLOY_PATH=/opt/looma-zervi bash scripts/healthcheck.sh
 # =============================================================
 set -uo pipefail
 fail=0
@@ -57,6 +62,57 @@ check "容器 looma-chromadb running" 'container_running looma-chromadb'
 
 # --- 安全断言（本次变更的核心目的）---
 check "端口收内网：无 0.0.0.0:5200/6379/8000" 'ports_are_loopback_only'
+
+# --- 业务冒烟 ---
+# /health 只证明进程活着。若 app.py 未注册某个蓝图（历史上 rsync --delete
+# 用旧 app.py 覆盖就发生过），/health 仍返回 200，但会员订阅、数据导出等
+# 业务已静默消失：不报错、不回滚、难排查。下面几条专门覆盖这一类故障。
+
+SMOKE_MIN_ENDPOINTS="${SMOKE_MIN_ENDPOINTS:-150}"
+DEPLOY_PATH="${DEPLOY_PATH:-/opt/looma-zervi}"
+
+# membership 蓝图注册探针：免鉴权端点，蓝图未注册时会 404 而非 401
+membership_plans_ok() {
+  curl -sf --max-time 10 -o /dev/null http://127.0.0.1:5200/v1/membership/plans
+}
+
+# 关键模块必须出现在 url_map 清单里（account 无免鉴权端点，只能查清单）
+endpoints_modules_ok() {
+  local body
+  body="$(curl -sf --max-time 10 http://127.0.0.1:5200/v1/endpoints 2>/dev/null)"
+  [ -n "$body" ] || return 1
+  printf '%s' "$body" | grep -q '"membership"' || return 1
+  printf '%s' "$body" | grep -q '"account"' || return 1
+}
+
+# 路由总数下限：整块蓝图缺失时总数会明显下降
+endpoints_count_ok() {
+  local n
+  n="$(curl -sf --max-time 10 http://127.0.0.1:5200/v1/endpoints 2>/dev/null \
+        | grep -oE '"(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) ' | wc -l | tr -d ' ')"
+  [ "${n:-0}" -ge "$SMOKE_MIN_ENDPOINTS" ]
+}
+
+# 跑的必须是本次发布的代码：backend 以卷挂载 ../backend:/app，
+# /health.git_commit 读的就是部署时写入的 git_commit.txt。
+# 不一致 = 容器没起来 / 没重启，旧代码仍在对外服务。
+running_commit_is_current() {
+  local want got
+  [ -f "$DEPLOY_PATH/backend/git_commit.txt" ] || return 1
+  want="$(tr -d ' \t\n\r' < "$DEPLOY_PATH/backend/git_commit.txt")"
+  [ -n "$want" ] || return 1
+  # /health 返回的是紧凑 JSON（"git_commit":"xxx"，冒号后无空格），
+  # 不能按格式化 JSON 匹配。按逗号 / 左花括号切行再取值，两种格式都兼容。
+  got="$(curl -sf --max-time 10 http://127.0.0.1:5200/health 2>/dev/null \
+        | tr ',{' '\n' | grep '"git_commit"' | head -1 | sed 's/.*: *"//; s/".*//')"
+  [ -n "$got" ] || return 1
+  [ "$got" = "$want" ]
+}
+
+check "业务探针：/v1/membership/plans 应答（membership 蓝图已注册）" 'membership_plans_ok'
+check "路由清单含 membership / account 模块" 'endpoints_modules_ok'
+check "路由总数 ≥ ${SMOKE_MIN_ENDPOINTS}（整块蓝图缺失时会下降）" 'endpoints_count_ok'
+check "运行的 git_commit 与本次发布一致（代码确实生效）" 'running_commit_is_current'
 
 if [ "$fail" -eq 0 ]; then
   printf '\033[32m=== 全部健康 ===\033[0m\n'

@@ -415,6 +415,9 @@ jobs:
           echo "=== https://api.genz.ltd/health ==="
           curl -sf --connect-timeout 20 "https://api.genz.ltd/health"
           echo
+          echo "=== api 业务探针：membership 蓝图已注册（免鉴权）==="
+          curl -sf --connect-timeout 20 -o /dev/null "https://api.genz.ltd/v1/membership/plans" \
+            || { echo "::error::api /v1/membership/plans 未应答——业务可能未随本次发布注册"; exit 1; }
           echo "=== tspace 同源 login 代理 ==="
           curl -sf --connect-timeout 20 -X POST "https://tspace.genz.ltd/v1/auth/login" \
             -H "Content-Type: application/json" \
@@ -426,15 +429,23 @@ jobs:
           echo "HTTP ${REG_CODE}"
           [ "${REG_CODE}" = "200" ] || { echo "::error::tspace /register 期望 200"; exit 1; }
 
-      - name: 失败且 /health 已死才回滚 compose
+      - name: 失败回滚（分层：服务死 → 恢复 compose；服务活但冒烟失败 → 回滚代码）
         if: failure()
         run: |
           $SSH_CMD "$DEPLOY_TARGET" "STACK_DIR=$STACK_DIR DEPLOY_PATH=$DEPLOY_PATH bash -s" << 'REMOTE'
           set -u
           if curl -sf -m 5 http://127.0.0.1:5200/health >/dev/null 2>&1; then
-            echo "服务仍在跑 → 前置/端口断言失败，不回滚（回滚可能把端口重新暴露）"
-            exit 1
+            echo "=== /health 仍活着 → 判定为业务冒烟失败：只回滚代码，不动 compose ==="
+            echo "（恢复 compose 历史备份会用旧文件把 backend 端口重新暴露为 0.0.0.0:5200，故不这么做）"
+            bash "$STACK_DIR/current/scripts/rollback-release.sh" --apply || {
+              echo "::error::代码回滚失败，需人工介入：bash scripts/rollback-tag.sh <tag>"; exit 1; }
+            echo "=== 回滚后复检 ==="
+            bash "$STACK_DIR/current/scripts/healthcheck.sh" || {
+              echo "::error::回滚后复检仍失败，需人工介入"; exit 1; }
+            echo "已回滚代码到上一个 release，并通过复检"
+            exit 0
           fi
+          echo "=== /health 已死 → 恢复 compose 备份（服务已不可用时优先恢复）==="
           LAST="$(ls -1 "${STACK_DIR}"/backups/docker-compose.yml.* 2>/dev/null | tail -1)"
           [ -n "${LAST}" ] || { echo "无备份"; exit 1; }
           cp "${LAST}" "${DEPLOY_PATH}/docker/docker-compose.yml"
