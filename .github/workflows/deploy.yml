@@ -400,6 +400,13 @@ jobs:
           # 进化：现网收款在跑，禁止 compose down 整栈（redis/chroma 有状态）。
           \$COMPOSE up -d --remove-orphans --no-build backend redis chromadb
 
+          # 代码以卷挂载 ../backend:/app，且 gunicorn 无 --reload：
+          # 只改 Python 代码时镜像 hash 与 compose 配置都不变，上面那条 up -d
+          # 会判定「无变化」而不重启容器 —— 新代码不会生效，进程里跑的仍是旧版本
+          # （线上 /health.git_commit 会停留在上一次的 sha，正是新增断言要抓的现象）。
+          # 故显式重建 backend 容器：不重建镜像（秒级），--no-deps 不动 redis/chromadb。
+          \$COMPOSE up -d --force-recreate --no-deps --no-build backend
+
           b="\$(docker port looma-backend 5200/tcp 2>/dev/null | head -1)"
           [ "\$b" = "127.0.0.1:5200" ] || { echo "REFUSE backend 端口 \$b"; exit 1; }
           echo "=== 端口收内网 OK \$b ==="
@@ -437,12 +444,22 @@ jobs:
           if curl -sf -m 5 http://127.0.0.1:5200/health >/dev/null 2>&1; then
             echo "=== /health 仍活着 → 判定为业务冒烟失败：只回滚代码，不动 compose ==="
             echo "（恢复 compose 历史备份会用旧文件把 backend 端口重新暴露为 0.0.0.0:5200，故不这么做）"
+            # 先记下本次发布的 tag：回滚会把 current 软链翻回旧 release，
+            # 之后再调 $STACK_DIR/current/scripts/healthcheck.sh 拿到的就是
+            # 旧 release 里的脚本——它没有本次新增的四条业务断言，只看
+            # /health 是否 200，用它复检等于用旧标准自我通过。
+            CUR_TAG="$(awk 'NR==1{print $1}' "$STACK_DIR/CURRENT_RELEASE" 2>/dev/null)"
+            echo "本次发布 tag = ${CUR_TAG:-（未知）}"
             bash "$STACK_DIR/current/scripts/rollback-release.sh" --apply || {
               echo "::error::代码回滚失败，需人工介入：bash scripts/rollback-tag.sh <tag>"; exit 1; }
-            echo "=== 回滚后复检 ==="
-            bash "$STACK_DIR/current/scripts/healthcheck.sh" || {
-              echo "::error::回滚后复检仍失败，需人工介入"; exit 1; }
-            echo "已回滚代码到上一个 release，并通过复检"
+            echo "=== 回滚后复检：必须用本次发布带去的那份 healthcheck.sh ==="
+            SMOKE="$STACK_DIR/releases/$CUR_TAG/scripts/healthcheck.sh"
+            if [ -z "$CUR_TAG" ] || [ ! -f "$SMOKE" ]; then
+              echo "::error::找不到本次发布带去的 healthcheck.sh（$SMOKE），无法用新断言复检"; exit 1; }
+            echo "复检脚本 = $SMOKE"
+            bash "$SMOKE" || {
+              echo "::error::回滚后复检仍失败（已用本次发布带去的业务断言），需人工介入"; exit 1; }
+            echo "已回滚代码到上一个 release，并通过本次发布带去的业务断言"
             exit 0
           fi
           echo "=== /health 已死 → 恢复 compose 备份（服务已不可用时优先恢复）==="

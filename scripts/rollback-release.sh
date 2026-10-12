@@ -81,8 +81,22 @@ echo "rolled-back:$TARGET" > "$DEPLOY_PATH/backend/git_commit.txt"
 echo "$TARGET rolled-back $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STACK_DIR/CURRENT_RELEASE"
 ln -sfn "$SRC" "$STACK_DIR/current"
 
+# 必须重建 backend 进程，不能只 up -d：
+#   1) 代码以卷挂载 ../backend:/app，换掉文件不影响已经在跑的进程；
+#   2) _git_commit() 带 @lru_cache（进程级缓存，见 backend/src/app.py），
+#      文件换了内存里仍是本次失败的那个值。
+#   只 up -d 的结果是「文件已回滚、进程仍是坏版本」，而且用旧脚本复检
+#   还看不出来——看起来回滚成功，实际服务没换过来。
+#   --force-recreate 强制重建容器让进程重新加载；--no-deps 不动
+#   redis / chromadb（有状态服务）。
 docker compose --env-file "$DEPLOY_PATH/backend/.env" \
   -f "$DEPLOY_PATH/docker/docker-compose.yml" -p looma-zervi \
-  up -d --no-build --remove-orphans backend redis chromadb
+  up -d --force-recreate --no-deps --no-build backend
 
-echo "已回滚代码到 $TARGET（compose 与端口配置未改动）"
+# 确认进程真的起来了：重建失败时让调用方拿到非 0，而不是假装回滚成功
+if [ "$(docker inspect -f '{{.State.Status}}' looma-backend 2>/dev/null)" != "running" ]; then
+  echo "REFUSE: backend 容器未处于 running —— 回滚后的代码可能并未加载"
+  exit 1
+fi
+
+echo "已回滚代码到 $TARGET（compose 与端口配置未改动，backend 进程已重建）"
