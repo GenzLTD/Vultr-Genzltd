@@ -14,6 +14,15 @@
 > - 第 2 / 3 / 4 / 5 问：仍未回答 ❓ —— 均属"失败分支"，只有在真机失败时才会走到。
 > - 第 6 问（`--force-recreate` 对照实验）：未做，仍未回答 ❓
 >
+> **预发演练结果（2026-10-13，win 侧实操；未经第三方复核，代码层面事实已本地核对）**：
+> - 第 2 / 3 问：**已验证** ✅ —— 摘掉 membership 注册后健康检查退出码 1（真失败），
+>   回滚确实换掉了 backend 进程，`/health.git_commit` = `rolled-back:staging-r2`。
+> - 第 4 问：复检确实用了 `releases/staging-r3/scripts/healthcheck.sh` ✅；但 r3 与回滚
+>   目标 r2 的脚本**同版本**，故「软链翻到旧脚本」的对照**尚未做出**（需 staging-r1）。
+> - 第 1 问：预发侧再证一次 ✅（staging-r2 11 项全绿）。
+> - 第 5 / 6 问：仍未做 ❓
+> - **新发现**：路由总数断言对「只摘掉 membership」这类故障**无区分度** —— 详见 §8。
+>
 > **原定适用窗口（已过）**：`PR #18`（merge commit `e4e72279`）合入 `main` 之后、
 > 首个 `stack-v*` 发布之前。
 >
@@ -141,7 +150,7 @@ bash "$STACK_DIR/releases/staging-r3/scripts/healthcheck.sh"    # 必须用本�
 
 | # | 验收点 | 怎么验 |
 |---|---|---|
-| 1 | `/health.git_commit` = `rolled-back:staging-r3` | 证明**进程**换了（`lru_cache` 已空） |
+| 1 | `/health.git_commit` = `rolled-back:<回滚落地到的那份 release>`（实测 `rolled-back:staging-r2`） | 证明**进程**换了（`lru_cache` 已空）。**更正**：标记是回滚**后**跑的那一份（r2），不是失败的那一份（r3）——脚本语义正确，运维一眼即知当前处于哪个版本的回滚态。本文初版误写为 `staging-r3` |
 | 2 | 复检脚本 = `releases/staging-r3/scripts/healthcheck.sh` | 日志中确认路径，不是 `current` 软链 |
 | 3 | 服务恢复：`/v1/endpoints` 含 membership + account，`/v1/membership/plans` 200 | 业务真的回来了 |
 | 4 | `looma-redis` / `looma-chromadb` **未被重建** | `docker ps` 的 Up 时间未变（`--no-deps` 生效） |
@@ -210,3 +219,40 @@ bash "$STACK_DIR/releases/staging-r3/scripts/healthcheck.sh"    # 必须用本�
 - **不验证**前端 `rsync --delete`（workflow 步骤 5）与前端产物
 - **不验证 workflow 编排本身**：预发是手工复现步骤 2→7；编排正确性靠 code review，不靠本次演练
 - **不覆盖**"回滚成功但服务仍坏"这类双重故障的组合场景
+
+---
+
+## 8. 演练结果记录（2026-10-13，win 侧实操）
+
+### 8.1 已验证
+
+| 项 | 结果 |
+|---|---|
+| staging-r2（`e4e72279`）健康检查 | 11 项全绿 |
+| staging-r3（只注释 `app.register_blueprint(membership_bp, url_prefix="/v1")`） | `/health` **仍 200**，健康检查**退出码 1**；失败两条：`/v1/membership/plans` 不应答、`url_map` 无 membership |
+| 回滚 | `rollback-release.sh --apply`，backend 容器 id 变更（**进程真换了**），`/health.git_commit` = `rolled-back:staging-r2` |
+| 复检 | 用 `releases/staging-r3/scripts/healthcheck.sh`，11 项转绿 |
+| redis / chromadb | 容器 id 与启动时间均未变（`--no-deps` 生效） |
+| 端口 | 仍 `127.0.0.1:5200`，compose 未被回滚 |
+
+### 8.2 新发现：路由总数断言对模块级故障无区分度
+
+- membership 蓝图**仅 5 个端点**（`backend/src/api/routes/membership_routes.py` 实测）；account 2 个
+- 摘掉整块 membership：183 → 178，仍 ≥ `SMOKE_MIN_ENDPOINTS=150`
+- 即：**该断言的设计意图（「整块蓝图缺失时总数下降」）在 membership 这种规模下根本不触发**
+- 真正抓到故障的是第 2 条（模块名存在性），总数阈值目前形同**冗余**
+- 建议：改为**相对阈值**（如「较上一 release 下降超过 2%」），或明确写清「总数阈值只防大规模缺失，模块级缺失靠模块名断言」。**不要保留「有总数保护」的错觉**
+
+### 8.3 `/health` 仍 200 的意义
+
+坏版本下 `/health` 返回 200 —— 若无 PR #18 的四条业务断言，这次会被判「发布成功」。**PR #18 存在的理由已被实证。**
+
+### 8.4 剩余（按建议顺序）
+
+1. **staging-r1 对照**：r1 用 v0.1.4 的旧 `healthcheck.sh`（无业务断言）。在其上造坏版本并回滚后，分别用 `releases/<bad>/scripts/healthcheck.sh`（新）与 `current/scripts/healthcheck.sh`（旧）复检 —— 证明后者会**误判通过**。这是第 4 问的完整验证，也是「复检不跟软链走」这一设计决策的唯一实证途径。
+2. **第 5 问**：`/health` 起不来时是否走「恢复 compose」分支 —— 唯一完全没走过的分支。
+3. **第 6 问**：不带 `--force-recreate` 的纯代码对照 —— 已有半证（v0.1.5 生产 `git_commit` 已更新；本次回滚进程确实换了），优先级最低。
+
+### 8.5 数据来源与限制
+
+本节结论来自 win 侧实操记录，**未经第三方复核**。代码层面事实（membership 5 端点、`rolled-back` 标记语义）已在本仓 `e4e72279` 本地核对；容器 id 变化、健康检查输出等运行时事实以操作者自报为准。
