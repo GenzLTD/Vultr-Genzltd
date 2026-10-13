@@ -482,7 +482,7 @@ jobs:
               -f "${DEPLOY_PATH}/docker/docker-compose.yml" -p looma-zervi \
               up -d --no-build --remove-orphans backend redis chromadb \
               || { echo "::error::compose up 失败（服务可能未起来）"; return 1; }
-            echo "已恢复 compose 到 ${LAST}"
+            echo "compose 文件已换回 ${LAST}（服务是否恢复待探活）"
           }
 
           # 兜底 = 换 compose + 再探 /health。两条路径（回滚后仍死、回滚被拒绝）
