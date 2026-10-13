@@ -1,0 +1,197 @@
+# 预发演练方案：PR #18 冒烟与回滚的真机验证
+
+> 适用：`PR #18`（merge commit `e4e72279`）合入 `main` 之后、首个 `stack-v*` 发布之前。
+>
+> **核心口径：合入 `main` ≠ 验证过。** PR #18 给部署加了四条业务断言与分层回滚，
+> 但截至本文撰写，`scripts/rollback-release.sh` 与新增断言**从未在真机运行过一次**。
+> 若直接打 `stack-v*`，那次发布就是它们的首次真机执行，失败代价由生产承担。
+> 本文的目的：把首次执行搬到预发机，验证通过后再上生产。
+>
+> 机器地址不写入本仓（本仓为公开仓），以 `<STAGING_HOST>` 占位。
+
+---
+
+## 0. 这次演练要回答的六个问题
+
+| # | 问题 | 阶段 | 不验证的后果 |
+|---|---|---|---|
+| 1 | 四条业务断言在真实服务上是否全绿（**不误报**） | D | 误报即误回滚，每次发布都可能自我回滚 |
+| 2 | 断言失败时是否真的触发回滚 | E | 门禁形同虚设 |
+| 3 | 回滚后**进程**是否真的换了（而非只换了文件） | E | 文件回滚、进程仍跑坏版本，服务依旧是坏的 |
+| 4 | 复检用的是本次发布带去的脚本，而非软链翻回的旧脚本 | E | 用旧标准自我通过 |
+| 5 | `/health` 死掉时走"恢复 compose"分支，而非代码回滚分支 | F | 该分支从未执行过，可能根本不工作 |
+| 6 | 步骤 7 的 `--force-recreate` 是否确有必要的（对照实验） | G | 若没必要，纯代码发布本可不重建；若有必要而删了，发布停在旧 sha |
+
+---
+
+## 1. 红线（全程不变，任何阶段不得越过）
+
+| # | 红线 | 理由 |
+|---|---|---|
+| 1 | **不打 `stack-v*` tag** | 那是生产 `deploy` 的唯一触发条件 |
+| 2 | release 目录统一命名 `staging-r1`…`staging-r4` | 从命名上杜绝误 push 触发生产 |
+| 3 | **不 push 任何东西到远端** | 预发机上的改动只留在预发机 |
+| 4 | 不碰生产机、不碰生产数据 | 预发 `.env` 用最小本地集（`PAYMENT_STUB_MODE=true`，本地 DB），不接 Stripe / Supabase 生产凭据 |
+| 5 | 端口只绑 `127.0.0.1:5200` | compose 现状即如此；预发会被故意弄坏，不得对外可见 |
+| 6 | **不在预发机上修改仓内脚本** | 发现缺陷 → 回本机开分支提 PR；否则"预发绿了、生产那份还是旧的" |
+
+---
+
+## 2. 环境：预发与生产的差异
+
+| 项 | 生产 | 预发 | 影响 |
+|---|---|---|---|
+| backend 端口 | `127.0.0.1:5200`（宿主 nginx 反代） | 同 | 无 |
+| 宿主 nginx | 有，`/etc/nginx/nginx.conf` ← 本仓 `nginx/nginx.conf` | 装，证书用**自签** | `healthcheck.sh` 第 1 条断言（`:80` + `Host: api.genz.ltd`）需 nginx |
+| 域名 / CF | `api.genz.ltd` 经 Cloudflare | 无域名，仅 `127.0.0.1` | 公网侧冒烟（workflow 中 `curl https://api.genz.ltd/...`）**不在预发验证** |
+| 支付 | 真实 Stripe | `PAYMENT_STUB_MODE=true` | `/v1/membership/plans` 不需要真 key |
+| 数据库 | 生产库 | 本地（`DATABASE_PATH`） | 演练不碰生产数据 |
+| 镜像 | 已存在（部署用 `--no-build`） | 首次需 `build` | 见阶段 C |
+
+目录：
+
+```
+/opt/looma-zervi            DEPLOY_PATH（运行态：backend/、docker/、data/）
+/opt/vultr-genzltd-stack    STACK_DIR（releases/、current、CURRENT_RELEASE、backups/）
+/opt/src/Vultr-Genzltd      clone 出来的本仓（rsync 源，不 --delete）
+```
+
+---
+
+## 3. 阶段 A–H
+
+### A 摸底（只读）
+
+OS / 内存 / 磁盘 / `docker`、`nginx`、`rsync`、`git`、`openssl` 是否已有 / `/opt` 现状。
+
+**验收**：内存 ≥ 2GB（chromadb 与 backend 并存）；否则停下请示（见 §5）。
+
+### B 环境准备
+
+```bash
+apt-get update && apt-get install -y docker.io docker-compose-plugin nginx rsync git openssl
+mkdir -p /opt/looma-zervi/{backend,docker,data} /opt/vultr-genzltd-stack/{releases,backups,scripts}
+git clone https://github.com/GenzLTD/Vultr-Genzltd.git /opt/src/Vultr-Genzltd   # 本仓 PUBLIC，无需 deploy key
+```
+
+- **nginx + 自签证书**：证书路径以 `nginx/nginx.conf` 中 `ssl_certificate` / `ssl_certificate_key` 声明为准（A 阶段确认），用 `openssl req -x509` 自签一份放进去，使 `nginx -t` 能通过。
+- **`.env` 最小集**：以 `backend/.env.example` 为模板，设 `PAYMENT_STUB_MODE=true`、本地 `DATABASE_PATH`、随机 `JWT_SECRET`、`RATE_LIMIT_STORAGE_URI=redis://redis:6379/0`、`CHROMA_MODE` + `CHROMA_HOST=chromadb`、`FLASK_PORT=5200`。缺什么以实测补。
+
+**验收**：`nginx -t` 通过；`docker ps` 可执行。
+
+### C 首次构建镜像
+
+生产部署是 `--no-build`，即镜像必须**事先存在**。预发是空机，必须先构建一次：
+
+```bash
+cd /opt/looma-zervi/docker && docker compose build backend
+```
+
+**验收**：`docker images` 中有 backend 镜像；此后 `--no-build` 可用。
+
+### D 基线部署 R1、R2（手工复现 workflow 步骤 2→7）
+
+对 `TAG=staging-r1`（代码 `stack-v0.1.4`，生产当前版本）与 `staging-r2`（`main` @ `e4e72279`）各执行一次：
+
+```bash
+REL=$STACK_DIR/releases/$TAG
+mkdir -p "$REL" && rsync -a --exclude='.git' /opt/src/Vultr-Genzltd/ "$REL/"   # 排除项以 deploy.yml 步骤 3 为准
+ln -sfn "$REL" "$STACK_DIR/current"
+echo "$TAG <sha> $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STACK_DIR/CURRENT_RELEASE"
+cp "$DEPLOY_PATH/docker/docker-compose.yml" "$STACK_DIR/backups/docker-compose.yml.$(date +%Y%m%d-%H%M%S)"
+rsync -a "$REL/compose/docker-compose.yml" "$DEPLOY_PATH/docker/docker-compose.yml"
+rsync -a "$REL/backend/" "$DEPLOY_PATH/backend/"                 # 排除 .env
+echo "<sha>" > "$DEPLOY_PATH/backend/git_commit.txt"             # 必须在容器启动前
+cd "$DEPLOY_PATH/docker" && docker compose up -d --force-recreate --no-deps --no-build backend
+bash "$STACK_DIR/current/scripts/healthcheck.sh"
+```
+
+**验收**：两次 `healthcheck.sh` 全绿（8 条前置 + 4 条业务断言）；`/health.git_commit` = 对应 sha。
+
+**附带验证（R1 之后立刻做）**：此时还没有"上一个 release"，执行一次回滚 —— 期望**明确报错并拒绝动作**，而不是回滚到不存在的目标或误改 `CURRENT_RELEASE`。
+
+### E 主演练：坏版本 → 回滚
+
+1. 造 `staging-r3` = `staging-r2` + 注释掉 `app.py` 中 membership 蓝图注册
+   （复现历史上 `rsync --delete` 用旧 `app.py` 覆盖、业务静默消失的事故）
+2. 按 D 的流程部署 R3 → `healthcheck.sh` 应失败：`/v1/membership/plans` 404、`url_map` 缺 membership
+3. 触发回滚（复现 workflow `if: failure()` 分支）：
+
+```bash
+curl -sf -m 5 http://127.0.0.1:5200/health && bash "$STACK_DIR/current/scripts/rollback-release.sh" --apply
+bash "$STACK_DIR/releases/staging-r3/scripts/healthcheck.sh"    # 必须用本次带去的脚本复检
+```
+
+**五个验收点（缺一不可）**：
+
+| # | 验收点 | 怎么验 |
+|---|---|---|
+| 1 | `/health.git_commit` = `rolled-back:staging-r3` | 证明**进程**换了（`lru_cache` 已空） |
+| 2 | 复检脚本 = `releases/staging-r3/scripts/healthcheck.sh` | 日志中确认路径，不是 `current` 软链 |
+| 3 | 服务恢复：`/v1/endpoints` 含 membership + account，`/v1/membership/plans` 200 | 业务真的回来了 |
+| 4 | `looma-redis` / `looma-chromadb` **未被重建** | `docker ps` 的 Up 时间未变（`--no-deps` 生效） |
+| 5 | compose 未被回滚，`docker ps` 仍 `127.0.0.1:5200`，无 `0.0.0.0:5200` | 未被旧 compose 暴露端口 |
+
+### F `/health` 死掉的分支
+
+造 R4：让 gunicorn 起不来（如 `app.py` 语法错误）。部署后 `/health` 不可达，
+复现 workflow 中 `curl 127.0.0.1:5200/health` 失败的那一路 —— 应走**恢复 compose**（`backups/docker-compose.yml.*`），
+而不是代码回滚。
+
+**验收**：脚本输出表明走的是 compose 恢复分支；恢复后容器能起。
+
+> 已知待改进点：这段"活则回滚代码、死则恢复 compose"的分支判断目前**内联在 `deploy.yml`**，
+> 不在 `rollback-release.sh` 里。预发只能手工复现该判断，无法直接调用脚本验证。
+> 若演练确认其有效，值得另开议题把它抽到脚本里（届时预发可直接测）。
+
+### G 步骤 7 的对照实验
+
+在 R2 基础上做一个**纯 Python 改动**（不动 `requirements.txt` / `Dockerfile`），做成 `staging-r4b`：
+
+1. 先按**旧行为**部署（`up -d`，不带 `--force-recreate`）→ 观察 `/health.git_commit` 是否仍显示 R2 的 sha
+2. 再按 PR #18 的行为部署（带 `--force-recreate`）→ `git_commit` 应更新为本次 sha
+
+**验收**：第 1 步若是旧 sha，即实证步骤 7 的 `--force-recreate` 确有必要（纯代码发布否则不生效）。
+
+### H 收尾
+
+- 记录：六个问题各自的结果（通过 / 不符 / 未覆盖）
+- 发现脚本缺陷 → **回本机开分支提 PR**，不在预发机上热改
+- 预发机保留作长期预发场（见 §7）
+
+---
+
+## 4. 中断条件（出现即停下请示，不自行推进）
+
+| 情况 | 为什么停 |
+|---|---|
+| 内存 < 2GB 且 chromadb 起不来 | 需决策：裁 chromadb（改验证范围）还是升配 |
+| `compose build` 拉不动依赖 | 需决策：换源 / 精简依赖 |
+| `nginx -t` 因证书或路径失败且自签无法解决 | 需决策：完整复现 vs 接受第 1 条断言在预发恒失败 |
+| 任何脚本行为与 PR #18 设计不符 | 这是**演练的产出**，应回本机开 PR，不该在预发绕过 |
+| 出现"必须改仓内脚本才能继续" | 同上 |
+
+---
+
+## 5. 演练自身失败如何恢复
+
+预发可推平重建，代价为零：`docker compose down` → `rm -rf /opt/looma-zervi` → 从阶段 B 重来。
+**这正是不在生产上做的原因**：预发炸了不心疼，生产炸了是真实中断。
+
+---
+
+## 6. 演练后：预发机转为长期预发场
+
+保留 `/opt/src` 与 `releases/`。此后每次 `stack-v*` 之前，在预发机上先跑 D + E 的最小集：
+部署目标版本 → 冒烟 → 通过才打 tag。必要时可另开议题把预发纳入 CI
+（`workflow_dispatch` 增加 staging 目标），使预发与生产共用同一份编排。
+
+---
+
+## 7. 未覆盖范围（明确边界，勿据此认为已验证）
+
+- **不做**真实支付（stub 模式），不验证 Stripe 链路
+- **不验证**公网侧冒烟（`https://api.genz.ltd/...`、tspace/app 登录注册）—— 预发无域名、在 CF 之外
+- **不验证**前端 `rsync --delete`（workflow 步骤 5）与前端产物
+- **不验证 workflow 编排本身**：预发是手工复现步骤 2→7；编排正确性靠 code review，不靠本次演练
+- **不覆盖**"回滚成功但服务仍坏"这类双重故障的组合场景
