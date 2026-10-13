@@ -12,6 +12,9 @@
 > 塞进海外册是语义污染。
 >
 > 采集时间 2026-10-13。**标「待核实」的项未经实证，动手前先核。**
+>
+> **当前状态（2026-10-13）：本表为事实记录，未授权据此动手。** `circle` 维持关闭、
+> 不杀进程；不跳到 P2 去改生产编排。
 
 ---
 
@@ -19,12 +22,12 @@
 
 | 域名 | 服务 | 代码真源 | 平台 / CI | 触发条件 | 部署目标 | **回滚方式** | 现状 |
 |---|---|---|---|---|---|---|---|
-| `api.genz.ltd` | backend (Flask :5200) | 本仓 `Vultr-Genzltd` `backend/` | 本仓 `deploy.yml` | `stack-v*` tag（且 `DEPLOY_ENABLED=true`） | SG `/opt/looma-zervi` | `scripts/rollback-release.sh --apply`；`/health` 死则恢复 compose 备份 | `stack-v0.1.4` = `b92d33f`（2026-10-11） |
-| `tspace.genz.ltd` | saas 前端 | 本仓 `frontend/`（`SOURCE.json` 声明海外 tspace 在本仓维护） | 同 `deploy.yml` 步骤 5 | 同 `stack-v*` | SG `/var/www/saas/dist` | **无独立回滚**：随后端 release 一起发布，但 `rollback-release.sh` 只 rsync `backend/`，不含前端 | 同 `stack-v0.1.4` |
+| `api.genz.ltd` | backend (Flask :5200) | 本仓 `Vultr-Genzltd` `backend/` | 本仓 `deploy.yml` | `stack-v*` tag（且 `DEPLOY_ENABLED=true`） | SG `/opt/looma-zervi` | `scripts/rollback-release.sh --apply`；`/health` 死则恢复 compose 备份 | `stack-v0.1.5` = `e4e72279`（2026-10-13） |
+| `tspace.genz.ltd` | saas 前端 | 本仓 `frontend/`（`SOURCE.json` 声明海外 tspace 在本仓维护） | 同 `deploy.yml` 步骤 5 | 同 `stack-v*` | SG `/var/www/saas/dist` | **无独立回滚**：随后端 release 一起发布，但 `rollback-release.sh` 只 rsync `backend/`，不含前端 | 同 `stack-v0.1.5` |
 | `app.genz.ltd` | planet-x | `looma-zervi` → Vercel | Vercel（team `team_7yn...`） | Vercel 侧 git push 自动部署 | Vercel 边缘 | Vercel Instant Rollback（与本仓**无联动**） | 构建源停 `d8f4c8d2`（2026-08-17），与后端差约 55 天 |
 | `circle.genz.ltd` | kernel | — | **无** | **无** | SG `:5211` 裸 uvicorn（不在 compose） | **无回滚概念**（根本没有发布） | 公网 404，nginx include 仍注释，进程仍在跑 |
-| `genz.ltd` | genz-web | 待核实 | 待核实 | 待核实 | 待核实 | 待核实 | 待核实 |
-| `www.genz.ltd` | Genzer-Terminal | 待核实 | 待核实 | 待核实 | 待核实 | 待核实 | 待核实 |
+| `genz.ltd` | genz-web | `GenzLTD/genz-web` | Vercel | Vercel git 集成 | Vercel 边缘 | Vercel 回滚 | 部署时间未提供 |
+| `www.genz.ltd` | Genzer-Terminal | `GenzLTD/Genzer-Terminal` | Vercel | Vercel git 集成 | Vercel 边缘 | Vercel 回滚 | 部署时间未提供 |
 
 证书：`CN=genz.ltd`、`SAN=genz.ltd,*.genz.ltd`，有效期至 2036-07-11（通配覆盖 `app` / `circle`）。
 
@@ -58,7 +61,7 @@
 
 | 级 | 内容 | 风险 | 前置 | 建议时机 |
 |---|---|---|---|---|
-| **P0** | ① 维护本表（事实层）② `circle` 收尾：把「维持关闭」变成可验证状态（进程停掉） | 零 / 需授权（涉及现网进程） | 无 | 现在 |
+| **P0** | ① 维护本表（事实层）② `circle` 收尾：**未授权，暂不执行** —— 当前口径「维持关闭、不杀进程」 | 零 / 需授权（涉及现网进程） | 无 | **待授权** |
 | **P1** | ① `tspace` 回滚纳入 `rollback-release.sh`（或明确「前端不单独回滚」并记录理由）② 定性 `app` 是**冻结**还是**收编**；冻结需在文档与前端可见处声明 ③ 收敛 `looma-zervi` 双远端 | 低 | 预发演练走通（PR #19） | 演练后 |
 | **P2** | ① 预发纳入 CI（`workflow_dispatch` 增加 staging 目标）② 统一发布编排（一个 `stack-v*` 发布后端 + 前端，可选触发 app hook） | 中：动真实收款的生产编排（`PAYMENT_STUB_MODE=false`） | 预发长期可用 | 预发跑通后 |
 | **P3** | `app` 收编进主仓、境内仓治理 | 高 | — | 架构议题，已搁置 |
@@ -73,6 +76,8 @@
 
 现状已部分符合「关闭」：公网 404、nginx include 注释、本机 hosts 灰度行已于 2026-10-12 删除。
 **唯一残留**：SG 机上 `:5211` 的裸 uvicorn 进程仍在跑。
+
+> **当前口径（2026-10-13）：维持关闭、不杀进程。** 本项未获授权，不执行。
 
 > 注意：动现网进程需**单独授权**。此前口径为「circle 维持关闭，不要动现网的 uvicorn」，
 > 故本项在获得明确授权前不执行。执行时动作仅为止进程（不删代码、不改 nginx）。
