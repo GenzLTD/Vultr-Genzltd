@@ -393,6 +393,18 @@ jobs:
             echo "\$HASH" > "\$MARKER"
           fi
 
+          # 路由总数基线：必须在重建容器之前抓，此时跑的还是上一版代码。
+          # healthcheck 之后用它判断「本次是否掉了一大块路由」。
+          mkdir -p "$STACK_DIR/baselines"
+          BASE=\$(curl -sf --max-time 10 http://127.0.0.1:5200/v1/endpoints 2>/dev/null | grep -oE '"(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) ' | wc -l | tr -d ' ') || BASE=0
+          if [ "\$BASE" -gt 0 ]; then
+            echo "\$BASE" > "$STACK_DIR/baselines/endpoint-count"
+            echo "=== 路由总数基线（上一版）= \$BASE ==="
+          else
+            rm -f "$STACK_DIR/baselines/endpoint-count"
+            echo "=== 旧进程无应答，本次不设路由总数基线 ==="
+          fi
+
           echo "=== git_commit 必须在容器启动前写入 ==="
           echo "${{ github.sha }}" > "\${DEPLOY_PATH}/backend/git_commit.txt"
           cat "\${DEPLOY_PATH}/backend/git_commit.txt"
