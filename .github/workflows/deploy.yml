@@ -441,27 +441,51 @@ jobs:
         run: |
           $SSH_CMD "$DEPLOY_TARGET" "STACK_DIR=$STACK_DIR DEPLOY_PATH=$DEPLOY_PATH bash -s" << 'REMOTE'
           set -u
-          # 恢复 compose 备份：先查端口，含 0.0.0.0:5200 就拒绝。
-          # 历史备份会把 backend 暴露到公网，恢复它比不恢复更糟。
+          # 探 /health：容器刚重建时需要启动时间，单次 curl -m 5 会把「还在启动」
+          # 判成「仍死」，接着就去换 compose —— 而换 compose 救不了代码问题。
+          # 与 healthcheck.sh 同一惯例：12 次 × 5s = 60s。
+          wait_health() {
+            local i=1
+            while [ "$i" -le 12 ]; do
+              curl -sf -m 5 http://127.0.0.1:5200/health >/dev/null 2>&1 && return 0
+              sleep 5
+              i=$((i + 1))
+            done
+            return 1
+          }
+
+          # 恢复 compose 备份：
+          #   - 端口行必须明确是 127.0.0.1:5200。只查 0.0.0.0:5200 会漏掉写成
+          #     "5200:5200" 的旧备份 —— 那同样绑到所有网卡。
+          #   - cp 与 docker compose 的失败都要接住：否则命令失败后仍会打印
+          #     「已恢复 compose」，把死服务写成已恢复（第 5 问要堵住的假装成功）。
           restore_compose() {
             LAST="$(ls -1 "${STACK_DIR}"/backups/docker-compose.yml.* 2>/dev/null | tail -1)"
             [ -n "${LAST}" ] || { echo "::error::无 compose 备份，需人工介入"; return 1; }
-            if grep -qE '0\.0\.0\.0:5200' "${LAST}"; then
-              echo "::error::备份 ${LAST} 含 0.0.0.0:5200（会把 backend 暴露到公网），拒绝恢复"
-              return 1
-            fi
-            cp "${LAST}" "${DEPLOY_PATH}/docker/docker-compose.yml"
+            grep -qE '127\.0\.0\.1:5200' "${LAST}" \
+              || { echo "::error::备份 ${LAST} 的端口行不含 127.0.0.1:5200，拒绝恢复"; return 1; }
+            cp "${LAST}" "${DEPLOY_PATH}/docker/docker-compose.yml" \
+              || { echo "::error::写回 compose 失败"; return 1; }
             docker compose --env-file "${DEPLOY_PATH}/backend/.env" \
               -f "${DEPLOY_PATH}/docker/docker-compose.yml" -p looma-zervi \
-              up -d --no-build --remove-orphans backend redis chromadb
+              up -d --no-build --remove-orphans backend redis chromadb \
+              || { echo "::error::compose up 失败（服务可能未起来）"; return 1; }
             echo "已恢复 compose 到 ${LAST}"
+          }
+
+          # 兜底 = 换 compose + 再探 /health。两条路径（回滚后仍死、回滚被拒绝）
+          # 都走这里，行为一致：换完仍死就报人工介入，绝不打印「已恢复」。
+          compose_fallback() {
+            restore_compose || return 1
+            wait_health || { echo "::error::恢复 compose 后 /health 仍不可达，需人工介入"; return 1; }
+            echo "已通过 compose 兜底恢复服务"
           }
 
           # 为什么是「代码优先」而不是「compose 优先」：
           #   /health 不可达分不清是「compose 被改坏」还是「代码起不来」。
           #   预发实测（2026-10-13）：app.py 语法错误 → /health 死 → 恢复 compose
           #   → 容器 restarting、/health 仍死（坏代码还在磁盘上，换 compose 救不了）。
-          #   而恢复 compose 又有把 backend 端口暴露成 0.0.0.0:5200 的风险。
+          #   而恢复 compose 又有把 backend 端口暴露出去的风险。
           #   代码回滚不动 compose、无端口风险，所以先做它。
           #   代价：若真是 compose 被改坏而代码本身是好的，会多退一版代码 —— 可接受，
           #   因为代码回滚不动端口，之后仍能用 compose 兜底。
@@ -470,12 +494,9 @@ jobs:
 
           if bash "$STACK_DIR/current/scripts/rollback-release.sh" --apply; then
             echo "=== 代码已回滚（compose 未动），再判 /health ==="
-            if ! curl -sf -m 5 http://127.0.0.1:5200/health >/dev/null 2>&1; then
+            if ! wait_health; then
               echo "=== /health 仍死 → 走 compose 兜底 ==="
-              restore_compose || { echo "::error::compose 兜底失败，需人工介入"; exit 1; }
-              curl -sf -m 10 http://127.0.0.1:5200/health >/dev/null 2>&1 \
-                || { echo "::error::恢复 compose 后 /health 仍不可达，需人工介入"; exit 1; }
-              echo "已通过 compose 兜底恢复服务"
+              compose_fallback || { echo "::error::compose 兜底失败，需人工介入"; exit 1; }
               exit 0
             fi
             # /health 活着 → 用本次发布带去的那份脚本复检。不跟 current 软链走：
@@ -494,7 +515,8 @@ jobs:
             exit 0
           fi
 
-          # 代码回滚被拒绝（如 releases/ 下只有当前这一份，无上一个可退）→ 直接 compose 兜底
+          # 代码回滚被拒绝（如 releases/ 下只有当前这一份，无上一个可退）→ 直接 compose 兜底。
+          # 与上面那条路径走同一个 compose_fallback：换完同样再探 /health，仍死就退出 1。
           echo "=== 代码回滚被拒绝（可能只有一份 release）→ 直接走 compose 兜底 ==="
-          restore_compose || { echo "::error::compose 兜底失败，需人工介入"; exit 1; }
+          compose_fallback || { echo "::error::compose 兜底失败，需人工介入"; exit 1; }
           REMOTE
