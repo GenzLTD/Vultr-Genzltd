@@ -33,7 +33,7 @@ PROBE_PORT=15200
 RUNTIME=1
 [ "${1:-}" = "--static" ] && RUNTIME=0
 
-ALLOWED_PUBLISHED="127.0.0.1:5200"
+ALLOWED_PUBLISHED="127.0.0.1:5200 127.0.0.1:5210"
 PY=""
 if [ -n "${PYTHON_BIN:-}" ] && "$PYTHON_BIN" -c "import sys" >/dev/null 2>&1; then
   PY="$PYTHON_BIN"
@@ -168,15 +168,15 @@ else
 fi
 
 # -------------------------------------------------------------
-hdr 5 "端口收内网断言（唯一允许发布: ${ALLOWED_PUBLISHED}）"
+hdr 5 "端口收内网断言（允许发布: ${ALLOWED_PUBLISHED}）"
 RENDERED="$ERR_DIR/rendered.json"
 if docker compose -f "$COMPOSE" --project-directory "$ROOT/compose" config --format json >"$RENDERED" 2>/dev/null; then
   runpy - "$RENDERED" "$ALLOWED_PUBLISHED" <<'PY'
 import json, sys
-rendered, allowed = sys.argv[1], sys.argv[2]
+rendered, allowed_list = sys.argv[1], sys.argv[2].split()
 d = json.load(open(rendered, encoding="utf-8"))
 svcs = d.get("services", {})
-expected = {"backend", "chromadb", "redis"}
+expected = {"backend", "chromadb", "redis", "tatha"}
 rc = 0
 if set(svcs) != expected:
     print(f"  \033[31m✗\033[0m 服务集合异常: {sorted(svcs)} != {sorted(expected)}")
@@ -194,14 +194,15 @@ for name in sorted(svcs):
         tag = f"{host_ip}:{p.get('published')}"
         published.append(tag)
         target = p.get("target")
-        if tag == allowed:
+        if tag in allowed_list:
             print(f"  \033[32m✓\033[0m {name}: {tag} → 容器 {target}")
         else:
-            print(f"  \033[31m✗\033[0m {name}: {tag} → 容器 {target}（应为 {allowed} 或不发布）")
+            print(f"  \033[31m✗\033[0m {name}: {tag} → 容器 {target}（应为 {' / '.join(allowed_list)} 或不发布）")
             rc = 1
-if allowed not in published:
-    print(f"  \033[31m✗\033[0m 缺少必需的发布端口 {allowed}（宿主 nginx upstream 依赖它）")
-    rc = 1
+for a in allowed_list:
+    if a not in published:
+        print(f"  \033[31m✗\033[0m 缺少必需的发布端口 {a}（宿主 nginx upstream 依赖它）")
+        rc = 1
 sys.exit(rc)
 PY
   [ $? -ne 0 ] && fail=1
