@@ -354,13 +354,19 @@ def engine_get_state():
 
 @narrative_bp.route("/engine/matrix", methods=["GET"])
 def engine_get_matrix():
-    """Get the 6×6 domain interaction matrix (public, for reference)."""
+    """Get the 6×6 domain interaction matrix (public, for reference).
+
+    注意：``domains`` 必须转成 list —— Flask 3 的默认 JSON provider 用
+    ``json.dumps``，无法序列化 ``set``，直接传 ``VALID_DOMAINS`` 会抛
+    ``TypeError: Object of type set is not JSON serializable`` → 500。
+    ``sorted()`` 同时保证响应稳定，契约门禁与快照可比。
+    """
     matrix: dict[str, dict[str, dict]] = {}
     for (src, tgt), (level, desc) in _load_matrix().items():
         if src not in matrix:
             matrix[src] = {}
         matrix[src][tgt] = {"level": level.value, "description": desc}
-    return jsonify(matrix=matrix, domains=VALID_DOMAINS)
+    return jsonify(matrix=matrix, domains=sorted(VALID_DOMAINS))
 
 
 def _load_matrix():
