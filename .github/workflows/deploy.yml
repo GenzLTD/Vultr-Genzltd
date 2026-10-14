@@ -448,6 +448,10 @@ jobs:
           echo "HTTP ${REG_CODE}"
           [ "${REG_CODE}" = "200" ] || { echo "::error::tspace /register 期望 200"; exit 1; }
 
+      - name: "8c 发布后契约复跑（线上 /v1/endpoints ↔ 前端 bundle，matrix 必须 200）"
+        run: |
+          bash scripts/post-deploy-contract.sh
+
       - name: 失败回滚（代码优先：先回滚代码不动 compose；仍死才恢复 compose 兜底）
         if: failure()
         run: |
