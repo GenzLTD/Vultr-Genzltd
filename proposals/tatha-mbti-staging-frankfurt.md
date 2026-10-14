@@ -167,7 +167,7 @@ docker/Dockerfile.tatha  ← 海外版镜像（本仓维护）
 |---|---|
 | 域名 | **一个都不加**。这是本方案的前提，不是可选项 |
 | LLM 出境 | `GO-LIVE-CHECKLIST.md` 已把 `deepseek` 从海外候选剔除（GDPR Art.44+ / PIPL 出境）。预发机上 `TATHA_DEFAULT_MODEL` 走 `openai` |
-| 人格端点实际上不调 LLM | `/v1/mbti/analyze` 直接调 `MBTITextAnalyzer`（关键词计数），`/v1/ask` 的 mbti 分支同样；只有意图解析会碰 LLM。**注意：`TATHA_USE_LLM_INTENT` 代码默认是 `true`**（`src/tatha/core/config.py:28`：`os.getenv("TATHA_USE_LLM_INTENT","true")`），"不调 LLM"**必须靠显式注入 `false`**——上游 `Dockerfile:12` 与本方案 compose §4.2 各有一处，缺一不可。**所以预发验证阶段 `OPENAI_API_KEY` 可以完全留空**，零数据出境；但任何绕过这两处的裸跑都会回落 `true` 并调 LLM |
+| 人格端点实际上不调 LLM | `/v1/mbti/analyze` 直接调 `MBTITextAnalyzer`（关键词计数），`/v1/ask` 的 mbti 分支同样；只有意图解析会碰 LLM。**注意：`TATHA_USE_LLM_INTENT` 代码默认是 `true`**（`src/tatha/core/config.py:28`：`os.getenv("TATHA_USE_LLM_INTENT","true")`），"不调 LLM"**必须靠显式注入 `false`**。保障只有**本方案的两层**（v2.2 更正，上游 Dockerfile 不在范围内）：① 本仓 `docker/Dockerfile.tatha` **写死** `ENV TATHA_USE_LLM_INTENT=false`（§4.2 硬规则 1）；② compose `environment` 再注入一次（§4.2 片段）。**所以预发验证阶段 `OPENAI_API_KEY` 可以完全留空**，零数据出境；但任何绕过这两层的裸跑都会回落 `true` 并调 LLM |
 | 数据落地 | 用户自述文本在法兰克福处理，不出 EU |
 
 ---
@@ -274,4 +274,4 @@ sudo ufw delete allow 80/tcp
 | 算法三副本漂移 | 不在本方案范围，见 `GenzLTD/planetx-tatha#5` |
 | ssh 凭据 | **v2 更正**：~~需授权后才能上机~~ —— 实测**通道存在**：Windows 机用专用预发钥（注释 `win-cursor-vultr-staging`）可登录，Dell 机用 `looma_staging_fra` 同样可登录；**被拒的只是 Mac 侧的 9 把私钥 × 6 用户名** ⇒ Mac 如需操作该机，先补配 authorized_keys |
 | 443 入口 | 443 无 `default_server`，`https://<IP>/` 会命中 `api.genz.ltd` 的证书 ⇒ 本方案只承诺 **http://80**；如需 https 另行方案（配证书 + default_server），不与本方案混 |
-| ufw 放行 80 的暴露面 | 未知 Host 由 404 变为进 Tatha（§3.2 已述）；`api/tspace` 两个 Host 路由本就设计为公网可达，放行 80 不改变其暴露面 |
+| ufw 放行 80 的暴露面（v2.2 更正） | **放行前**：本机 80 对公网整体超时（实测，含 api/tspace 两个 Host）。**放行后**：这台机的 80 全部可达 —— 不止未知 Host 落进 Tatha，**带 `api.genz.ltd` / `tspace.genz.ltd` Host 的 HTTP 请求同样直接可达各自的 server 块**（nginx 路由本身不受影响，但暴露面是实打实变宽了）。接受这一暴露面是 §7 步骤 0 的前提；不接受则回到"加专用域名/子域"路线，不在本方案内 |
