@@ -102,6 +102,12 @@ Stripe 回 `parameter_unknown`。business use 是 `txcd_10103001`，本项目不
 6. 打 tag：`git tag stack-vX.Y.Z && git push origin stack-vX.Y.Z`
    （发版纪律：先 push 分支，再单独 push tag，避免 Actions 双记录）。
 7. 线上验收：
+   - 自动化冒烟：`python scripts/e2e_smoke.py` —— 覆盖 plans 契约 / 注册 / status /
+     subscribe 会话参数 / portal 404 / 自清理注销，15 项断言零依赖（stdlib），
+     **不产生扣款**（Checkout Session 不支付自动过期）。本机 TLS 不通时可
+     `--base-url http://IP --host-header tspace.genz.ltd` 直连源站；设
+     `E2E_STRIPE_SECRET_KEY` 可追加 Stripe 会话级深检。注意：subscribe 201
+     本身即证明税码修复生效——码值无效时 automatic_tax 下建会话会 502。
    - `GET /v1/membership/plans` → 三档 + `billing_entity=YEDALL LIMITED`（**这条曾经 404**，见 §5）
    - 未登录 `POST /v1/membership/subscribe` → 401；登录后 → 拿到 Stripe Checkout URL
    - 走完一笔真实小额订阅 → Stripe Dashboard 出现 Subscription、webhook 返回 200
