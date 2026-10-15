@@ -98,7 +98,10 @@ services:
   tatha:
     build:
       context: ../services/tatha
-      dockerfile: ../docker/Dockerfile.tatha
+      # dockerfile 相对 context 解析（context = <repo>/services/tatha，两层深），
+      # 故需两级 ../ 才回到 <repo>/docker/。写成 ../docker/... 会被解析成
+      # services/docker/Dockerfile.tatha 并在 build 时报 lstat no such file。
+      dockerfile: ../../docker/Dockerfile.tatha
     container_name: tatha-mbti
     restart: unless-stopped
     ports:
