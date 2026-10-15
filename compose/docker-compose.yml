@@ -91,6 +91,30 @@ services:
     networks:
       - looma-net
 
+  # ============================================
+  # Tatha（人格测评海外运行时；起步树见 services/tatha/SOURCE.json）
+  # 只在预发机使用；镜像本仓维护：docker/Dockerfile.tatha
+  # ============================================
+  tatha:
+    build:
+      context: ../services/tatha
+      dockerfile: ../docker/Dockerfile.tatha
+    container_name: tatha-mbti
+    restart: unless-stopped
+    ports:
+      # 收内网：仅宿主回环。宿主 nginx default_server 反代 127.0.0.1:5210；
+      # 公网不能直连 5210 绕过 nginx（Docker 会穿透 ufw）。
+      - "127.0.0.1:5210:8010"
+    environment:
+      # 双保险之二（其一在 Dockerfile.tatha 写死）：意图解析走规则，不调 LLM
+      - TATHA_USE_LLM_INTENT=false
+      - TATHA_DEFAULT_MODEL=${TATHA_DEFAULT_MODEL:-openai/gpt-4o-mini}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}  # 留空即不调 LLM，人格端点不受影响
+    env_file:
+      - ../services/tatha/.env
+    networks:
+      - looma-net
+
 volumes:
   backend-data:
   chroma-data:

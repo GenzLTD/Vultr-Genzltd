@@ -1,0 +1,13 @@
+{
+  "role": "overseas-runtime",
+  "not": "algorithm source",
+  "algorithm": "GenzLTD/planetx-tatha -> src/tatha/agents/mbti_analyzer.py",
+  "may_diverge": false,
+  "fork_origin": {
+    "tree": "GenzLTD/Tatha",
+    "git_commit": "c665677bdcedc52633e70a637ac9fda8d8512fdd",
+    "git_commit_note": "Tatha#7 已于 2026-10-14 合并（merge commit c665677，main HEAD）。钉合并提交本身，不钉分支 2ed8453；更早的 main（1971447）没有 POST /v1/mbti/analyze 与 mbti_daily_quota，不得作为起步树",
+    "copied_at": "2026-10-15",
+    "note": "16 型人格测评小工具。算法真源在 planetx-tatha，本树只作海外运行时；分析器改动回上游，不在此处分叉。上游顶层 Dockerfile 未随树拷入（硬编码密钥 + 缺 .chroma-cache，见提案 §4.1），镜像由本仓 docker/Dockerfile.tatha 负责。"
+  }
+}

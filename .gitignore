@@ -19,6 +19,8 @@ local/tmp-*.json
 *.env
 !.env.example
 !backend/.env.example
+# Tatha compose env_file 依赖仓内桩（空值）；真值只存在于预发机
+!services/tatha/.env
 
 # 前端工作区
 frontend/node_modules/

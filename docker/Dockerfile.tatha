@@ -1,0 +1,31 @@
+# Tatha（人格测评海外运行时）— 本仓维护，不复用上游 Tatha/Dockerfile：
+#   上游第 7 行 COPY .chroma-cache（仓内无此目录，构建必失败）；
+#   上游明文 ENV DEEPSEEK_API_KEY（密钥已视为泄露，另案轮换）。
+# 本镜像不写任何密钥；LLM 开关在下面写死 false（双保险之一，另一处在 compose environment）。
+FROM python:3.12-slim
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/src \
+    TATHA_USE_LLM_INTENT=false
+
+# 本仓面向海外机构建。默认走 Debian / PyPI 官方源，不绑国内镜像。
+# 国内网构建再开：--build-arg USE_CN_MIRROR=1 --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ARG USE_CN_MIRROR=0
+RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
+      sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' \
+        /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+      sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true; \
+    fi
+
+COPY requirements.txt .
+ARG PIP_INDEX_URL=https://pypi.org/simple/
+RUN pip install --no-cache-dir -r requirements.txt -i ${PIP_INDEX_URL}
+
+COPY . /app
+
+EXPOSE 8010
+
+# 运行时 /app 由 bind mount 覆盖；此处仅声明启动命令
+CMD ["uvicorn", "tatha.api.app:app", "--host", "0.0.0.0", "--port", "8010"]

@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://guibu.ai/contracts/skill-proof.v1.json",
+  "title": "Skill Proof v1",
+  "version": "1.0.0",
+  "description": "从 Guibu 微课产出的技能掌握证据，供 JobFirst 简历增强消费。真源契约，Tatha 摄入端与 claw 工具端引用同一 schema。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "user_id",
+    "skill_tags",
+    "evidence",
+    "generated_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "skill-proof.v1",
+      "description": "契约版本标识"
+    },
+    "user_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "跨平台统一关联键：sha256(email.lower().trim())，64 位 hex（2026-08-12 已决策，对齐 Tractor 适配方案 §八）。payload 只传 hash，不传明文 email。"
+    },
+    "skill_tags": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" },
+      "description": "从微课提取的技能标签，如 Python、数据分析、列表推导式"
+    },
+    "level": {
+      "type": ["string", "null"],
+      "enum": ["beginner", "intermediate", "advanced", null],
+      "description": "可选学习者水平"
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "description": "溯源证据数组：每条对应一个所学技能的学习材料出处",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["skill", "source", "excerpt"],
+        "properties": {
+          "skill": {
+            "type": "string",
+            "description": "该证据对应的技能"
+          },
+          "source": {
+            "type": "string",
+            "description": "学习材料出处（展示用源名）"
+          },
+          "file_path": {
+            "type": ["string", "null"],
+            "description": "本地或逻辑路径；上游仅给文件名时可 null"
+          },
+          "start_sec": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "description": "视频段起点（秒）；文档语料为 null"
+          },
+          "end_sec": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "description": "视频段终点（秒）；文档语料为 null"
+          },
+          "excerpt": {
+            "type": "string",
+            "description": "所学内容引用片段"
+          },
+          "similarity": {
+            "type": ["number", "null"],
+            "description": "检索置信度"
+          },
+          "learned_at": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "学迹时间戳（Phase 2 从 looma timeline 拉取；Phase 1 用 microlesson 生成时间代替）"
+          }
+        }
+      }
+    },
+    "total_micro_lessons": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "累计完成的微课数"
+    },
+    "proofs": {
+      "type": "array",
+      "default": [],
+      "description": "可验证声明（可选），如 looma_timeline / yedall_attestation / audit_package",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "value"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "证明类型：looma_timeline / yedall_attestation / audit_package"
+          },
+          "value": {
+            "type": "string",
+            "description": "证明引用 ID 或 URL"
+          }
+        }
+      }
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "证明生成时间（ISO-8601）"
+    },
+    "expires_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "技能证明有效期（如考证有期限）；null 表示长期有效"
+    }
+  },
+  "examples": [
+    {
+      "schema_version": "skill-proof.v1",
+      "user_id": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+      "skill_tags": ["Python", "列表推导式", "数据结构"],
+      "level": "beginner",
+      "evidence": [
+        {
+          "skill": "列表推导式",
+          "source": "python数据分析实战.md",
+          "file_path": null,
+          "start_sec": null,
+          "end_sec": null,
+          "excerpt": "列表推导式可以将循环与条件合并，语法为 [expr for x in iterable if cond]",
+          "similarity": 0.82,
+          "learned_at": "2026-08-12T10:00:00+08:00"
+        },
+        {
+          "skill": "列表推导式",
+          "source": "Python进阶技巧.md",
+          "file_path": null,
+          "start_sec": null,
+          "end_sec": null,
+          "excerpt": "嵌套列表推导式可以用来处理二维数组",
+          "similarity": 0.75,
+          "learned_at": "2026-08-12T10:05:00+08:00"
+        }
+      ],
+      "total_micro_lessons": 3,
+      "proofs": [
+        {
+          "type": "looma_timeline",
+          "value": "timeline_event_abc123"
+        }
+      ],
+      "generated_at": "2026-08-12T12:00:00+08:00",
+      "expires_at": null
+    }
+  ]
+}
