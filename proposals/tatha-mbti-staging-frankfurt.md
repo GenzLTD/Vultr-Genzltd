@@ -1,9 +1,9 @@
 # 人格小工具（Tatha MBTI）上法兰克福预发机：技术方案（方案 A）
 
 > **目标机**：Vultr 法兰克福预发机（本仓为公开仓，机器地址以 `<STAGING_HOST>` 占位，不入库）
-> **性质**：**已批准并实施** —— PR #33（起步树 + `Dockerfile.tatha` + compose `tatha` + nginx 反代）、PR #34（修 `dockerfile` 相对路径）均于 2026-10-15 合并；**已于预发机验证通过**，实测见 **§10**。仍**不进生产**（生产走 `stack-v*` tag）
+> **性质**：**已批准并实施，公网入口已收回** —— #33 / #34 于 2026-10-15 合并，预发机验证见 **§10**。同日 #37 把仓内 `default_server` 改回 404，预发机防火墙收回 80。**现行状态以 §12 为准**，不要按 §7 再放行 80。仍**不进生产**（生产走 `stack-v*` tag）
 > **硬约束**：**不新增任何域名**，只走 IP 直连；**不新增任何监听端口**
-> **前置（v2 修订）**：ufw 入站只放行 `22/tcp`，**必须先 `ufw allow 80/tcp`**，否则 IP 直连必然超时（实测见 §2 事实 1）
+> **前置（v2 修订，已被 §12 覆盖）**：当时 ufw 只放行 `22/tcp`，方案原文要求先 `ufw allow 80/tcp`。该放行已执行，并于同日删除。现行不要再放行。
 > **上游能力**：`GenzLTD/Tatha` 的 `POST /v1/mbti/analyze`（PR #7，16 型 + 三态 + 独立配额）
 
 ---
@@ -26,12 +26,12 @@
 
 | # | 事实 | 出处 |
 |---|---|---|
-| 1 | **ufw 入站只放行 `22/tcp`**（active，default deny incoming）。外部访问 80/443 **全部超时**；只有服务器本机 `curl 127.0.0.1/` 才得到 404 ⇒ **IP 直连目前没有任何入口，必须先放行 80** | 预发机 `ufw status` 实测；本机 `curl --noproxy '*' http://45.76.84.90/` 12s 0 字节 |
+| 1 | **2026-10-15 放行前**：ufw 入站只放行 `22/tcp`（active，default deny incoming）。外部访问 80/443 全部超时；只有服务器本机 `curl 127.0.0.1/` 才得到 404。这是放行前的实测，**不是现行入口要求**。现行见 §12 | 预发机 `ufw status`；本机 `curl --noproxy '*' http://<STAGING_HOST>/` 12s 0 字节 |
 | 2 | **Tatha 不在海外栈**：compose 只有 `looma-backend`(5200) + chromadb + redis，全仓 grep 不到 `tatha` / `mbti` | `compose/docker-compose.yml` |
 | 3 | **Docker 端口穿透宿主 ufw**。**预发机现状：`block-docker-ports.service` = inactive，`DOCKER-USER` 链为空**（与生产机不同）⇒ 新服务**必须**绑 `127.0.0.1`，绝不能 `0.0.0.0` | 预发机 `systemctl is-active` / `iptables -S DOCKER-USER` 实测 |
 | 4 | **443 没有 `default_server`**（`listen 443 ssl http2` 两处都未标）⇒ `https://<IP>/` 会命中第一张证书 **`api.genz.ltd`**。本方案**只走 80，不承诺 https 入口** | `nginx.conf:137` / `:220` 实测 |
 
-第 1 条说明"IP 直连"目前**没有任何入口**，必须放行 80；第 3 条说明新服务**只能绑宿主回环**；第 4 条说明别指望 `https://<IP>/`。
+第 1 条是放行前的实测，**现行不要据此再放行 80**（见 §12）。第 3 条说明新服务只能绑宿主回环。第 4 条说明别指望 `https://<IP>/`。第 2 条是实施前的仓内状态，实施后 compose 已有 `tatha`。
 
 ---
 
@@ -122,7 +122,7 @@ docker/Dockerfile.tatha  ← 海外版镜像（本仓维护）
 
 | 问题 | 具体 |
 |---|---|
-| 硬编码密钥 | `ENV DEEPSEEK_API_KEY=sk-73fd842e…`（明文，且已随 commit `3e868fc` 入库） |
+| 硬编码密钥 | 上游 Dockerfile 用 `ENV` 写死了一条明文密钥（已随 commit `3e868fc` 入库；密钥原文不在本文重复） |
 | 构建必失败 | `COPY .chroma-cache /root/.cache/chroma`，而仓内**无此目录** |
 | 镜像源/体积 | `pip install` 走默认源；无 `.dockerignore`，`COPY . /opt/tatha` 会把 `.venv`/`.git`/`tests` 全打进去 |
 
@@ -136,7 +136,7 @@ docker/Dockerfile.tatha  ← 海外版镜像（本仓维护）
   tatha:
     build:
       context: ../services/tatha
-      dockerfile: ../docker/Dockerfile.tatha
+      dockerfile: ../../docker/Dockerfile.tatha
     container_name: tatha-mbti
     restart: unless-stopped
     ports:
@@ -151,6 +151,8 @@ docker/Dockerfile.tatha  ← 海外版镜像（本仓维护）
     networks:
       - looma-net
 ```
+
+`dockerfile` 相对 `build.context` 解析，所以是两级 `../../docker/Dockerfile.tatha`（#34）。写成一级 `../docker` 会落到 `services/docker`，构建失败。
 
 容器内端口 **8010**（Tatha 默认），宿主 **5210**（与国内语义一致），宿主侧只绑回环。
 
@@ -288,15 +290,15 @@ sudo ufw delete allow 80/tcp
 | `GET /` | `200` | 直接返回 `index.html`（`<title>Tatha - 求职与陪伴，可持续</title>`）。**印证 §3.3 的 v2 更正**：`app.py:88` 有 `GET /`，无需 nginx 302 |
 | `GET /index.html` `/demo.html` `/auth.html` | `200` | 三个页面同源可达 |
 | `GET /v1/region?country=CN` | `200` | 含 `"mbti_daily_quota":{"free":3,"basic":30,"pro":9999}` ⇒ **跑的正是 #7 合并后的 `c665677`**，不是更早的 `1971447` |
-| `POST /v1/mbti/analyze`（未带 token） | `401` | 端点存在且鉴权生效，未匿名开放 |
+| `POST /v1/mbti/analyze`（未带 token） | `401` | 端点存在，缺 token 会拒绝。**这不等于鉴权已生效**：伪造 Bearer 当时返回 200，见 #36 |
 
-与方案的偏差只有一处（已在 v2 更正中覆盖）：根路径不走 302，直接 200。
+与方案的偏差有两处：根路径不走 302，直接 200（v2 已更正）；无 token 的 401 不能当成运行时鉴权已打开。
 
 ---
 
 ## 11. 治乱任务修订（预发跑通之后）
 
-预发跑通把"人格能力有没有公网入口"从**否**变成了**是**，下面据此重排。
+下面记录的是 2026-10-15 跑通当时的判断。公网入口已于同日收回，现行见 §12。
 
 ### 11.1 代码层：悬置项减少，但副本变多
 
@@ -317,22 +319,39 @@ sudo ufw delete allow 80/tcp
 
 ### 11.2 部署层：人格能力第一次有了公网入口，但也形成了两套形态
 
-- **海外（预发）**：`http://<STAGING_HOST>/` → nginx 80 → `127.0.0.1:5210` → Tatha。**人格能力首次公网可达**
+- **海外（预发）**：`http://<STAGING_HOST>/` → nginx 80 → `127.0.0.1:5210` → Tatha。§10 的窗口内曾公网可达，**已收回**（§12）
 - **国内（天翼）**：Tatha 仍跑 5210，公网已收回（补丁 3）⇒ **国内/海外是两套形态，不是同一套**
 - **文档口径冲突仍在**：补丁 3 说"5210 收回"、联邦测试方案说"5210 原样保留"。建议统一为「**国内收回；海外预发仅绑回环、经 nginx 暴露**」，两处文档各加一句交叉引用，避免下次再有人按错的那份施工
 
 ### 11.3 产品层：入口在外，链路在内还没闭环
 
-- `demo.html` 仍是三个 tab，**没有人格入口** ⇒ 能力有了、公网入口有了，页面内却无处可点
+- `demo.html` 仍是三个 tab，**没有人格入口** ⇒ 容器里的能力还在，页面内无处可点。公网入口已收回
 - 效果基线仍为零（无评测集）
 
 ### 11.4 修订后的优先级
 
 | # | 任务 | 理由 |
 |---|---|---|
-| 1 | **效果基线：30–50 条回归集** | 已有公网入口，对外任何准确率承诺都必须先有数字；也是防退化的唯一保险 |
-| 2 | **议题 #5 扩到四副本 + CI 校验** | 越晚做，四处重复付账越多；起步树已落，现在扩范围成本最低 |
+| 1 | **效果基线：30–50 条回归集** | 公网入口已收回。对外任何准确率承诺前仍要有数字 |
+| 2 | **议题 #5 的副本范围** | 起步树是第四份。CI 比对等 `planetx-tatha#6` 把契约范围定下来，不在本提案里开工 |
 | 3 | **`demo.html` 加人格 tab** | 40–60 行，让入口与页面闭环，内测才好演示 |
 | 4 | 生态门户 / 表达层文档 | 产品方向，不阻塞前三条 |
 
 > 原清单里的"Tatha #7 先合并吗""预发机是哪台、怎么连"**均已解除**（#7 已合并；通道确认存在，Mac 侧需补 authorized_keys）。
+
+---
+
+## 12. 现行状态（2026-10-16）
+
+§2 到 §11 保留方案和实施当天的记录。下面这几条覆盖它们里已经过时的入口描述。
+
+| 项 | 现行 |
+|---|---|
+| 公网 80/443 | 超时。预发机 `ufw` 只放行 `22/tcp`（IPv4/IPv6）。演练时加的 80 allow 已删除 |
+| 预发机 nginx | 仍是演练留下的 `default_server` → `tatha_backend`。没有手工改回 404，也没有 reload |
+| 仓内 `nginx/nginx.conf` | #37 已改回 `404 Unknown host`。下次打到生产的 `stack-v*` 不会再装回反代。这次合并不部署，也不改预发机 |
+| 容器 | `tatha-mbti` 在跑，只绑 `127.0.0.1:5210`。`TATHA_USE_LLM_INTENT=false` |
+| 鉴权 | `QUANTUM_AUTH_URL` 未配置，回环上伪造 Bearer 为 200，无 token 为 401。`ETHOS_AUTH_SECRET` 不被 `services/tatha` 的 `auth.py` 读取，配它关不掉 stub |
+| 跟踪 | `Vultr-Genzltd#36` 保持 open。ADR-0012 单 2 才是 Tatha 改读网关身份、并把 `QUANTUM_AUTH_URL` 置空的路径。认证服务不可达之前，不在预发机手改环境变量，也不再放行 80 |
+
+机器地址继续只用 `<STAGING_HOST>`，不写入本文。
