@@ -82,7 +82,9 @@ r1="$(snap looma-redis)"
 c1="$(snap looma-chromadb)"
 
 COMPOSE="docker compose --env-file $REPO/.staging-gfcc.env -f $REPO/compose/docker-compose.yml -f $REPO/compose/docker-compose.frankfurt.yml -p looma-zervi"
-docker tag looma-zervi-tatha:latest "looma-zervi-tatha:pre-$VULTR_SHA" 2>/dev/null || true
+docker image inspect "looma-zervi-tatha:pre-$VULTR_SHA" >/dev/null 2>&1 \
+  || docker tag looma-zervi-tatha:latest "looma-zervi-tatha:pre-$VULTR_SHA"
+rm -f "$REPO/.staging-delivery"
 $COMPOSE build tatha
 $COMPOSE up -d gfcc-pgvector
 $COMPOSE up -d --no-deps --force-recreate tatha
@@ -100,19 +102,15 @@ tport="$(docker port tatha-mbti 8010/tcp | head -n 1)"
 pport="$(docker port gfcc-pgvector 5432/tcp | head -n 1)"
 [ "$pport" = "127.0.0.1:5434" ] || { echo "REFUSE: gfcc-pgvector 端口 $pport" >&2; exit 1; }
 
-ready=0
+db=""
 i=1
 while [ "$i" -le 20 ]; do
-  if docker exec gfcc-pgvector pg_isready -U gfcc -d gfcc; then
-    ready=1
-    break
-  fi
+  db="$(docker exec gfcc-pgvector psql -U gfcc -d gfcc -tAc 'SELECT current_database()' 2>/dev/null || true)"
+  [ "$db" = "gfcc" ] && break
   sleep 2
   i=$((i + 1))
 done
-[ "$ready" = 1 ] || { echo "REFUSE: gfcc-pgvector 40 秒内未就绪" >&2; exit 1; }
-db="$(docker exec gfcc-pgvector psql -U gfcc -d gfcc -tAc 'SELECT current_database()')"
-[ "$db" = "gfcc" ] || { echo "REFUSE: 当前库是 $db" >&2; exit 1; }
+[ "$db" = "gfcc" ] || { echo "REFUSE: gfcc 库 40 秒内不可用（当前：$db）" >&2; exit 1; }
 
 healthy=0
 i=1
