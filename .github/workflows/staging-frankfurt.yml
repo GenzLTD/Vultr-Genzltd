@@ -59,22 +59,68 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 确认能读私有真源
+      # 这一步要真打一次 API，不能只判断「token 非空」。
+      # 只查非空时，token 无效/权限不足会一路滑到 checkout，报一句
+      # remote: Write access to repository not granted（403），看不出到底哪一环错。
+      - name: 确认能读私有真源（真打 API，区分 401/403/404）
         env:
           TOKEN: ${{ secrets.GFCC_READ_TOKEN }}
         run: |
-          if [ -z "$TOKEN" ]; then
-            echo "::error::GenzLTD/gfcc 是私有仓，需要 secrets.GFCC_READ_TOKEN"
+          set -uo pipefail
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::error::secrets.GFCC_READ_TOKEN 为空。GenzLTD/gfcc 是私有仓，本仓 GITHUB_TOKEN 读不到它。"
             exit 1
           fi
+          code="$(curl -sS -o /tmp/gfcc.json -D /tmp/gfcc.hdr -w '%{http_code}' \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/GenzLTD/gfcc || true)"
+          code="${code:-000}"
+          echo "GET /repos/GenzLTD/gfcc -> HTTP $code"
+          grep -iE '^(x-oauth-scopes|x-accepted-github-permissions|x-github-sso|x-ratelimit-remaining):' /tmp/gfcc.hdr | sed 's/^/  /' || true
+          case "$code" in
+            200)
+              echo "token 可读 gfcc ✓"
+              ;;
+            401)
+              echo "::error::HTTP 401：token 无效、已过期或已被撤销。重新铸一把（fine-grained，Resource owner=GenzLTD，只勾 GenzLTD/gfcc，Contents: Read-only）再 gh secret set GFCC_READ_TOKEN -R GenzLTD/Vultr-Genzltd。"
+              exit 1
+              ;;
+            403)
+              echo "::error::HTTP 403：token 有效但被拒。看上面响应头——有 X-GitHub-SSO 就点该链接做 SSO 授权；有 X-Accepted-GitHub-Permissions 则说明缺对应权限（至少要 contents=read）。"
+              exit 1
+              ;;
+            404)
+              echo "::error::HTTP 404：token 看不到这个仓。fine-grained token 的 Resource owner 要选 GenzLTD（不是个人），Repository access 要显式勾上 GenzLTD/gfcc。"
+              exit 1
+              ;;
+            *)
+              echo "::error::HTTP $code：非预期状态。"
+              head -c 400 /tmp/gfcc.json || true
+              exit 1
+              ;;
+          esac
 
-      - uses: actions/checkout@v4
-        with:
-          repository: GenzLTD/gfcc
-          ref: ${{ inputs.gfcc_ref }}
-          path: gfcc-src
-          persist-credentials: false
-          token: ${{ secrets.GFCC_READ_TOKEN }}
+      # 不用 actions/checkout 拉 gfcc：它对 fine-grained PAT 的注入路径不稳，
+      # 失败时统一报「Write access to repository not granted」，且会 fallback 到
+      # 本仓 GITHUB_TOKEN。这里用显式 extraheader，凭据只存在于命令参数，
+      # 不写进 .git/config，也不进日志。
+      - name: 拉取 gfcc 指定提交
+        env:
+          TOKEN: ${{ secrets.GFCC_READ_TOKEN }}
+          REF: ${{ inputs.gfcc_ref }}
+        run: |
+          set -euo pipefail
+          rm -rf gfcc-src && mkdir -p gfcc-src && cd gfcc-src
+          git init -q .
+          git remote add origin https://github.com/GenzLTD/gfcc
+          auth="$(printf 'x-access-token:%s' "$TOKEN" | base64 | tr -d '\n')"
+          git -c http.extraheader="AUTHORIZATION: basic $auth" \
+            fetch --depth=1 --no-tags origin "$REF"
+          git checkout -q --detach FETCH_HEAD
+          echo "gfcc HEAD = $(git rev-parse HEAD)（期望 $REF）"
+          test -d contracts || { echo "::error::gfcc 检出里没有 contracts/"; exit 1; }
 
       - name: 从真源拷贝契约字节
         id: vendor
