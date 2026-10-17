@@ -110,10 +110,36 @@ jobs:
           echo "services/tatha 仍无 memory.recall，也不读 X-Actor-Sub。重建 Tatha 不会补上这条路由。"
           echo "244b07f 仍把 sub 收成 sha256 的 X-User-Id。原样 X-Actor-Sub 不在本工作流。"
 
+  require-deploy-config:
+    name: dry_run=false 时配置必须齐
+    runs-on: ubuntu-latest
+    needs: pin
+    if: >-
+      github.repository == 'GenzLTD/Vultr-Genzltd'
+      && inputs.dry_run == false
+    steps:
+      - name: 缺一项就失败，避免 deploy 被静默跳过
+        env:
+          ENABLED: ${{ vars.STAGING_DEPLOY_ENABLED }}
+          HOST: ${{ vars.STAGING_DEPLOY_HOST }}
+          KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          PW: ${{ secrets.STAGING_GFCC_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ "$ENABLED" = "true" ] || missing="$missing STAGING_DEPLOY_ENABLED"
+          [ -n "$HOST" ] || missing="$missing STAGING_DEPLOY_HOST"
+          [ -n "$KEY" ] || missing="$missing STAGING_SSH_PRIVATE_KEY"
+          [ -n "$PW" ] || missing="$missing STAGING_GFCC_DB_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error::dry_run=false 但缺少:$missing"
+            exit 1
+          fi
+
   deploy:
     name: 部署到法兰克福
     runs-on: ubuntu-latest
-    needs: pin
+    needs: [pin, require-deploy-config]
     environment: staging
     if: >-
       github.repository == 'GenzLTD/Vultr-Genzltd'
