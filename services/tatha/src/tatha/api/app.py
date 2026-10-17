@@ -247,10 +247,23 @@ def ask(
     ``context.port_hint == "memory"`` 时不走意图解析，直接进 memory 端口的 recall
     （这一刀只接 recall；remember 需要 participant，本次不授予，因此没有写入口）。
     """
+    port_hint = str((request.context or {}).get("port_hint") or "").strip().lower()
+
+    # 身份校验先于配额扣减：缺 X-Actor-Sub 的请求被 401 拒绝时，不得消耗当日 ask 配额
+    # （free 档 ask 仅 1 次/日，一次 401 探测就把额度烧光是隐性事故）。
+    # recall 内部还有一道同语义校验，此处前置只做准入判断，两处语义一致。
+    if port_hint == MEMORY_PORT and not (actor_sub or "").strip():
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "missing_actor_sub",
+                "message": "memory 端口需要 X-Actor-Sub 头（原始 claims.sub），缺失即拒绝（不降级为匿名读取）",
+            },
+        )
+
     if not consume(auth.user_id, auth.tier, RESOURCE_ASK):
         raise _quota_exceeded_response()
 
-    port_hint = str((request.context or {}).get("port_hint") or "").strip().lower()
     if port_hint == MEMORY_PORT:
         from tatha.memory.recall import handle_recall
 
