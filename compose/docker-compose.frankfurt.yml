@@ -1,0 +1,30 @@
+# 法兰克福预发附加服务。生产 .github/workflows/deploy.yml 不引用本文件。
+# 与 compose/docker-compose.yml 一起用，项目名仍是 looma-zervi：
+#   docker compose --env-file .staging-gfcc.env \
+#     -f compose/docker-compose.yml -f compose/docker-compose.frankfurt.yml \
+#     -p looma-zervi up -d gfcc-pgvector
+#
+# 本文件不改 tatha 的 environment。覆盖 environment 列表会冲掉
+# TATHA_USE_LLM_INTENT=false。记忆库 URL 等 Tatha 源码读 actor_sub 时再加。
+#
+# 库名 gfcc。卷第一次创建是空库（empty_on_boot）。不建 adirp_*，不建 genzltd。
+# 只绑 127.0.0.1。密码来自 GFCC_DB_PASSWORD，不入库。
+
+services:
+  gfcc-pgvector:
+    image: pgvector/pgvector:pg16
+    container_name: gfcc-pgvector
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5434:5432"
+    environment:
+      POSTGRES_DB: gfcc
+      POSTGRES_USER: gfcc
+      POSTGRES_PASSWORD: ${GFCC_DB_PASSWORD:?set GFCC_DB_PASSWORD}
+    volumes:
+      - gfcc-pgvector-data:/var/lib/postgresql/data
+    networks:
+      - looma-net
+
+volumes:
+  gfcc-pgvector-data:

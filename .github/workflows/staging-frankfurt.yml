@@ -1,0 +1,191 @@
+# =============================================================
+# 法兰克福预发。不打 tag，不进新加坡。
+#
+#   触发只有 workflow_dispatch。stack-v* 仍由 deploy.yml 送到 vars.DEPLOY_HOST。
+#   dry_run 默认 true。即使关掉，还要 vars.STAGING_DEPLOY_ENABLED=true 才 SSH。
+#
+#   这次联调在预发机上要落地的：
+#     1. /opt/src/Vultr-Genzltd 检出切到本工作流的提交
+#     2. contracts/gfcc 换成 gfcc_ref 那一提交的字节，SOURCE.json 钉着该提交
+#        （L0 必须是 1.3.0）。这是消费者钉，不在服务器上改协议字段。
+#     3. 按该检出重建并只重启 tatha（127.0.0.1:5210）
+#     4. 空的 pgvector，库名 gfcc，只绑 127.0.0.1:5434
+#
+#   本工作流明确不装、也不该装的：
+#     - zervi-rust。网关由 Win 或 Mac 仿真，经 nginx 或到 127.0.0.1:5210 的隧道。
+#     - /opt/looma-zervi 与 looma-backend / redis / chromadb。容器 id 变了就失败。
+#     - stack-v*、新加坡 139.180.184.25、api.genz.ltd。
+#
+#   跑完仍缺、YAML 补不上的：
+#     - services/tatha（当前起步树 c665677）没有 memory.recall，不读 X-Actor-Sub。
+#       重建镜像不会长出这条路由。OpenAPI 没有 recall 时本工作流打 warning，不假装已经接上。
+#     - zervi-rust 244b07f 只转发 sha256 的 X-User-Id，没有 X-Actor-Sub。
+#       原样 sub 要等从 244b07f 拉出的后续分支，不在这次预发部署里。
+#
+#   真跑之前要有：
+#     vars.STAGING_DEPLOY_HOST、vars.STAGING_DEPLOY_ENABLED=true
+#     vars.STAGING_DEPLOY_USER（可空，默认 root）
+#     secrets.STAGING_SSH_PRIVATE_KEY、secrets.STAGING_GFCC_DB_PASSWORD
+#     secrets.GFCC_READ_TOKEN：GenzLTD/gfcc 是私有仓，本仓 GITHUB_TOKEN 读不到
+# =============================================================
+name: Staging Frankfurt
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'true：只钉契约并校验，不 SSH。false 仍要 STAGING_DEPLOY_ENABLED=true 才上法兰克福。'
+        type: boolean
+        default: true
+      gfcc_ref:
+        description: 'GenzLTD/gfcc 的完整提交。契约字节只从这一提交拷贝。'
+        required: true
+        default: '3dcb0846ae471ab37367596d61ec8aeadad34ba6'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-frankfurt
+  cancel-in-progress: false
+
+jobs:
+  pin:
+    name: 钉 GFCC 1.3.0
+    runs-on: ubuntu-latest
+    outputs:
+      gfcc_sha: ${{ steps.vendor.outputs.gfcc_sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 确认能读私有真源
+        env:
+          TOKEN: ${{ secrets.GFCC_READ_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::GenzLTD/gfcc 是私有仓，需要 secrets.GFCC_READ_TOKEN"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          repository: GenzLTD/gfcc
+          ref: ${{ inputs.gfcc_ref }}
+          path: gfcc-src
+          persist-credentials: false
+          token: ${{ secrets.GFCC_READ_TOKEN }}
+
+      - name: 从真源拷贝契约字节
+        id: vendor
+        run: |
+          set -euo pipefail
+          bash scripts/vendor-gfcc-pin.sh gfcc-src contracts/gfcc
+          echo "gfcc_sha=$(git -C gfcc-src rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: 契约层门禁
+        run: bash scripts/assert-contracts.sh
+
+      - name: 打包预发包（不含密钥、不含 zervi-rust）
+        run: |
+          set -euo pipefail
+          mkdir -p staging-bundle
+          cp -a contracts/gfcc staging-bundle/contracts-gfcc
+          cp compose/docker-compose.frankfurt.yml staging-bundle/docker-compose.frankfurt.yml
+          cp scripts/staging-frankfurt-remote.sh staging-bundle/staging-frankfurt-remote.sh
+          test -f staging-bundle/contracts-gfcc/memory.v1.json
+          test -f staging-bundle/contracts-gfcc/SOURCE.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frankfurt-staging
+          path: staging-bundle
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: 这次预发仍然缺的运行时
+        run: |
+          echo "契约钉来自 gfcc ${{ steps.vendor.outputs.gfcc_sha }}，L0 1.3.0。不打 stack-v*。"
+          echo "zervi-rust 不部署。Win 或 Mac 仿真网关，经 nginx 或隧道访问 127.0.0.1:5210。"
+          echo "services/tatha 仍无 memory.recall，也不读 X-Actor-Sub。重建 Tatha 不会补上这条路由。"
+          echo "244b07f 仍把 sub 收成 sha256 的 X-User-Id。原样 X-Actor-Sub 不在本工作流。"
+
+  deploy:
+    name: 部署到法兰克福
+    runs-on: ubuntu-latest
+    needs: pin
+    environment: staging
+    if: >-
+      github.repository == 'GenzLTD/Vultr-Genzltd'
+      && inputs.dry_run == false
+      && vars.STAGING_DEPLOY_ENABLED == 'true'
+    env:
+      SSH_HOST: ${{ vars.STAGING_DEPLOY_HOST }}
+      SSH_USER: ${{ vars.STAGING_DEPLOY_USER || 'root' }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: frankfurt-staging
+          path: staging-bundle
+
+      - name: 拒绝新加坡
+        env:
+          KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          PROD_HOST: ${{ vars.DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KEY" ] || [ -z "$SSH_HOST" ]; then
+            echo "::error::缺少 STAGING_SSH_PRIVATE_KEY 或 STAGING_DEPLOY_HOST"
+            exit 1
+          fi
+          case "$SSH_HOST" in
+            139.180.184.25|api.genz.ltd)
+              echo "::error::STAGING_DEPLOY_HOST 指向新加坡，本工作流拒绝"
+              exit 1
+              ;;
+          esac
+          if [ -n "$PROD_HOST" ] && [ "$SSH_HOST" = "$PROD_HOST" ]; then
+            echo "::error::STAGING_DEPLOY_HOST 与生产 DEPLOY_HOST 相同"
+            exit 1
+          fi
+
+      - name: 拒绝空密码或会破坏 compose 的密码
+        env:
+          PW: ${{ secrets.STAGING_GFCC_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, sys
+          pw = os.environ.get("PW", "")
+          if not pw or any(ch in pw for ch in "$'\"\n\r\t "):
+              sys.exit("缺少 STAGING_GFCC_DB_PASSWORD，或密码含空格、$、引号")
+          PY
+          umask 077
+          printf 'GFCC_DB_PASSWORD=%s\n' "$PW" > "$RUNNER_TEMP/gfcc.env"
+
+      - uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+
+      - name: known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          echo 'SSH_CMD=ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o StrictHostKeyChecking=yes -o BatchMode=yes' >> "$GITHUB_ENV"
+          echo "DEPLOY_TARGET=${SSH_USER}@${SSH_HOST}" >> "$GITHUB_ENV"
+
+      - name: 上传预发包与库密码
+        run: |
+          set -euo pipefail
+          $SSH_CMD "$DEPLOY_TARGET" "mkdir -p /tmp/staging-frankfurt"
+          rsync -avz -e "$SSH_CMD" staging-bundle/ "$DEPLOY_TARGET:/tmp/staging-frankfurt/"
+          scp -o BatchMode=yes "$RUNNER_TEMP/gfcc.env" "$DEPLOY_TARGET:/opt/src/Vultr-Genzltd/.staging-gfcc.env"
+          $SSH_CMD "$DEPLOY_TARGET" "chmod 600 /opt/src/Vultr-Genzltd/.staging-gfcc.env /tmp/staging-frankfurt/staging-frankfurt-remote.sh"
+          rm -f "$RUNNER_TEMP/gfcc.env"
+
+      - name: 检出、钉契约、只重建 tatha 与 gfcc 库
+        env:
+          GFCC_SHA: ${{ needs.pin.outputs.gfcc_sha }}
+        run: |
+          set -euo pipefail
+          $SSH_CMD "$DEPLOY_TARGET" "VULTR_SHA='${{ github.sha }}' GFCC_SHA='$GFCC_SHA' bash /tmp/staging-frankfurt/staging-frankfurt-remote.sh"

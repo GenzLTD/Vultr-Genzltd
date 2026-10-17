@@ -24,6 +24,10 @@
 #   tspace 源码已在 frontend/packages/saas，saas-build 会打出同源 artifact。
 #
 #   发版纪律：先 push 分支，再单独 push tag，避免 Actions 列表双记录。
+#
+#   法兰克福预发不走本文件。stack-v* 与这里的 workflow_dispatch 只到新加坡
+#   （vars.DEPLOY_HOST）。预发演练成熟之前，不要为预发打 stack-v*。
+#   预发见 .github/workflows/staging-frankfurt.yml，单独的 workflow_dispatch，不打 tag。
 # =============================================================
 name: Deploy stack
 
@@ -31,7 +35,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: '仅跑双门禁（不 SSH、不碰真机）。部署另需 DEPLOY_ENABLED。'
+        description: 'true：只跑门禁。false：部署到新加坡（vars.DEPLOY_HOST）。法兰克福不在本工作流。'
         type: boolean
         default: true
   # tag 触发不得加 paths：否则「只改契约/文档的 tag」会被滤掉。
