@@ -83,7 +83,8 @@ c1="$(snap looma-chromadb)"
 
 COMPOSE="docker compose --env-file $REPO/.staging-gfcc.env -f $REPO/compose/docker-compose.yml -f $REPO/compose/docker-compose.frankfurt.yml -p looma-zervi"
 docker image inspect "looma-zervi-tatha:pre-$VULTR_SHA" >/dev/null 2>&1 \
-  || docker tag looma-zervi-tatha:latest "looma-zervi-tatha:pre-$VULTR_SHA"
+  || docker tag looma-zervi-tatha:latest "looma-zervi-tatha:pre-$VULTR_SHA" \
+  || true
 rm -f "$REPO/.staging-delivery"
 $COMPOSE build tatha
 $COMPOSE up -d gfcc-pgvector
@@ -96,11 +97,6 @@ if [ "$b1" != "$b2" ] || [ "$r1" != "$r2" ] || [ "$c1" != "$c2" ]; then
   echo "REFUSE: looma-backend / redis / chromadb 容器被换掉了" >&2
   exit 1
 fi
-
-tport="$(docker port tatha-mbti 8010/tcp | head -n 1)"
-[ "$tport" = "127.0.0.1:5210" ] || { echo "REFUSE: tatha 端口 $tport" >&2; exit 1; }
-pport="$(docker port gfcc-pgvector 5432/tcp | head -n 1)"
-[ "$pport" = "127.0.0.1:5434" ] || { echo "REFUSE: gfcc-pgvector 端口 $pport" >&2; exit 1; }
 
 db=""
 i=1
@@ -124,6 +120,11 @@ while [ "$i" -le 30 ]; do
   i=$((i + 1))
 done
 [ "$healthy" = 1 ] || { echo "REFUSE: tatha /health 60 秒内未就绪。镜像锚点是 looma-zervi-tatha:pre-$VULTR_SHA" >&2; exit 1; }
+
+tport="$(docker port tatha-mbti 8010/tcp | head -n 1)"
+[ "$tport" = "127.0.0.1:5210" ] || { echo "REFUSE: tatha 端口 $tport" >&2; exit 1; }
+pport="$(docker port gfcc-pgvector 5432/tcp | head -n 1)"
+[ "$pport" = "127.0.0.1:5434" ] || { echo "REFUSE: gfcc-pgvector 端口 $pport" >&2; exit 1; }
 
 printf 'vultr=%s\ngfcc=%s\nl0=1.3.0\n' "$VULTR_SHA" "$GFCC_SHA" > "$REPO/.staging-delivery"
 
