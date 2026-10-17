@@ -113,6 +113,11 @@ services:
       - TATHA_USE_LLM_INTENT=false
       - TATHA_DEFAULT_MODEL=${TATHA_DEFAULT_MODEL:-openai/gpt-4o-mini}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}  # 留空即不调 LLM，人格端点不受影响
+      # memory 端口的 gfcc 库连接串。只在预发注入（预发 compose 用
+      # --env-file .staging-gfcc.env 提供 GFCC_DB_DSN）；新加坡生产没有这个变量，
+      # 解析为空串 ⇒ memory 端口返回 status=error 且不影响其余端点。
+      # 注意：这是往既有 environment 列表**追加**一项，不改变上面三条已有变量。
+      - GFCC_DB_DSN=${GFCC_DB_DSN:-}
     env_file:
       - ../services/tatha/.env
     networks:

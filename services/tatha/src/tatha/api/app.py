@@ -11,7 +11,7 @@ Tatha 主仓 HTTP 入口：供 ZeroClaw 助理 Tool 调用。
 """
 import io
 import os
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
@@ -42,6 +42,9 @@ from .schemas import (
 )
 from .central_brain import handle_ask
 from ..core.config import assert_signal_bridge_ready
+
+# GFCC ask.envelope.v1 的一等端口名；这一刀只接 memory 的 recall
+MEMORY_PORT = "memory"
 
 app = FastAPI(
     title="Tatha API",
@@ -230,10 +233,30 @@ def _quota_exceeded_response():
 
 
 @app.post("/v1/ask", response_model=AskResponse)
-def ask(request: AskRequest, auth: AuthContext = Depends(get_auth)):
-    """单入口：用户需求由此进入，中央大脑解析意图并分发到内部端口，返回统一 JSON。V1 需鉴权与配额。"""
+def ask(
+    request: AskRequest,
+    auth: AuthContext = Depends(get_auth),
+    actor_sub: str | None = Header(
+        None,
+        alias="X-Actor-Sub",
+        description="原始 claims.sub（memory 端口用）；与 X-User-Id=sha256(sub) 并存，两者不互替",
+    ),
+):
+    """单入口：用户需求由此进入，中央大脑解析意图并分发到内部端口，返回统一 JSON。V1 需鉴权与配额。
+
+    ``context.port_hint == "memory"`` 时不走意图解析，直接进 memory 端口的 recall
+    （这一刀只接 recall；remember 需要 participant，本次不授予，因此没有写入口）。
+    """
     if not consume(auth.user_id, auth.tier, RESOURCE_ASK):
         raise _quota_exceeded_response()
+
+    port_hint = str((request.context or {}).get("port_hint") or "").strip().lower()
+    if port_hint == MEMORY_PORT:
+        from tatha.memory.recall import handle_recall
+
+        result = handle_recall(request, actor_sub)
+        return AskResponse(intent=MEMORY_PORT, port=MEMORY_PORT, result=result, suggestions=[])
+
     return handle_ask(request)
 
 

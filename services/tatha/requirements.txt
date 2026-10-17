@@ -16,3 +16,5 @@ pydantic-evals>=0.0.1
 fastapi>=0.100.0
 uvicorn[standard]>=0.20.0
 python-dotenv>=1.0.0
+# memory 端口（GFCC 契约 memory.v1）读 gfcc 库用：同步驱动即可，recall 是短查询
+psycopg[binary]>=3.1
