@@ -17,6 +17,11 @@ class AskResponse(BaseModel):
     intent: str = Field(..., description="解析出的意图")
     result: dict[str, Any] = Field(default_factory=dict, description="能力端口返回的结果")
     suggestions: list[str] = Field(default_factory=list, description="可选：后续建议或提示")
+    port: Optional[str] = Field(
+        None,
+        description="GFCC ask.envelope.v1 的一等端口（memory 等）；契约 1.3.0 把 intent 归为 port 的别名，"
+        "本字段先并存、不替代 intent",
+    )
 
 
 class DocumentConvertResponse(BaseModel):

@@ -108,6 +108,26 @@ while [ "$i" -le 20 ]; do
 done
 [ "$db" = "gfcc" ] || { echo "REFUSE: gfcc 库 40 秒内不可用（当前：$db）" >&2; exit 1; }
 
+# memory 端口（recall）的存储结构。卷是已经 initdb 的，docker-entrypoint-initdb.d
+# 不会再跑，所以这里每次显式迁移；SQL 幂等，重复执行不改数据。
+MIGRATE="$STAGE/gfcc-memory-v1.sql"
+[ -f "$MIGRATE" ] || { echo "REFUSE: 预发包缺 gfcc-memory-v1.sql" >&2; exit 1; }
+docker exec -i gfcc-pgvector psql -U gfcc -d gfcc -v ON_ERROR_STOP=1 -q -f - < "$MIGRATE" \
+  || { echo "REFUSE: memory 存储迁移失败（compose/sql/gfcc-memory-v1.sql）" >&2; exit 1; }
+mcols="$(docker exec gfcc-pgvector psql -U gfcc -d gfcc -tAc \
+  "select count(*) from information_schema.columns where table_schema='public' and table_name='memory_record'" 2>/dev/null || true)"
+[ "$mcols" = "12" ] || { echo "REFUSE: memory_record 列数 $mcols（期望 12），迁移未生效" >&2; exit 1; }
+
+# 连接串必须真的进了容器：compose 注入没生效时 Tatha 会带着空 DSN 起来，
+# recall 只会返回 status=error，看起来像「没有记忆」，所以在这里就拦住。
+# 只判前缀，不打印值（DSN 里有口令）。
+if ! docker exec tatha-mbti true 2>/dev/null; then
+  echo "REFUSE: tatha 容器不可 exec（未运行或正在重启），先看 docker logs tatha-mbti" >&2
+  exit 1
+fi
+dsn_prefix="$(docker exec tatha-mbti printenv GFCC_DB_DSN 2>/dev/null | cut -c1-13 || true)"
+[ "$dsn_prefix" = "postgresql://" ] || { echo "REFUSE: tatha 容器内 GFCC_DB_DSN 不是 postgresql:// 开头（compose 注入或 .staging-gfcc.env 缺失）" >&2; exit 1; }
+
 healthy=0
 i=1
 while [ "$i" -le 30 ]; do
@@ -126,10 +146,33 @@ tport="$(docker port tatha-mbti 8010/tcp | head -n 1)"
 pport="$(docker port gfcc-pgvector 5432/tcp | head -n 1)"
 [ "$pport" = "127.0.0.1:5434" ] || { echo "REFUSE: gfcc-pgvector 端口 $pport" >&2; exit 1; }
 
-printf 'vultr=%s\ngfcc=%s\nl0=1.3.0\n' "$VULTR_SHA" "$GFCC_SHA" > "$REPO/.staging-delivery"
+printf 'vultr=%s\ngfcc=%s\nl0=1.3.0\nschema=memory.v1\n' "$VULTR_SHA" "$GFCC_SHA" > "$REPO/.staging-delivery"
 
-if curl -sf --max-time 20 http://127.0.0.1:5210/openapi.json | python3 -c 'import json,sys; paths=json.load(sys.stdin).get("paths",{}); sys.exit(0 if any("recall" in p for p in paths) else 1)'; then
-  echo "OK Tatha OpenAPI 含 recall"
-else
-  echo "::warning::Tatha 镜像没有 memory.recall。契约钉已是 1.3.0，services/tatha 还没有这条路由，也不读 X-Actor-Sub。zervi-rust 不在本机。"
-fi
+# 端到端冒烟：/v1/ask + context.port_hint=memory，带原始 X-Actor-Sub。
+# 只读、不写库；空结果按契约也算成功。free 档 ask 配额是 1 次/进程·天，
+# 容器刚重建所以计数是新的，这里只打一次。
+code="$(curl -s -o /tmp/recall-smoke.json -w '%{http_code}' --max-time 10 \
+  -H 'Authorization: Bearer staging-smoke' \
+  -H 'X-Actor-Sub: staging-smoke-sub' \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"recall smoke","context":{"port_hint":"memory","library":"issue","limit":1}}' \
+  http://127.0.0.1:5210/v1/ask || true)"
+case "$code" in
+  200)
+    if python3 -c 'import json,sys; d=json.load(open("/tmp/recall-smoke.json")); sys.exit(0 if d.get("port")=="memory" and d.get("result",{}).get("status")=="ok" else 1)'; then
+      echo "OK recall 冒烟：port=memory status=ok（空结果也算成功）"
+    else
+      echo "REFUSE: recall 响应不是 port=memory/status=ok：$(head -c 400 /tmp/recall-smoke.json)" >&2
+      exit 1
+    fi
+    ;;
+  401)
+    # 配了 QUANTUM_AUTH_URL 时 stub 身份不再被接受，此时流水线无法自测，但不该判失败。
+    echo "::warning::recall 冒烟 401：QUANTUM_AUTH_URL 已配置，流水线不带真实 token，跳过自测"
+    ;;
+  *)
+    echo "REFUSE: recall 冒烟 HTTP $code：$(head -c 400 /tmp/recall-smoke.json 2>/dev/null)" >&2
+    exit 1
+    ;;
+esac
+rm -f /tmp/recall-smoke.json

@@ -139,8 +139,12 @@ jobs:
           cp -a contracts/gfcc staging-bundle/contracts-gfcc
           cp compose/docker-compose.frankfurt.yml staging-bundle/docker-compose.frankfurt.yml
           cp scripts/staging-frankfurt-remote.sh staging-bundle/staging-frankfurt-remote.sh
+          # memory.recall 的存储结构。预发库是已 initdb 的卷，initdb.d 不会再跑，
+          # 所以这份 SQL 由远端脚本每次显式执行（幂等）。
+          cp compose/sql/gfcc-memory-v1.sql staging-bundle/gfcc-memory-v1.sql
           test -f staging-bundle/contracts-gfcc/memory.v1.json
           test -f staging-bundle/contracts-gfcc/SOURCE.json
+          test -f staging-bundle/gfcc-memory-v1.sql
 
       - uses: actions/upload-artifact@v4
         with:
@@ -149,12 +153,13 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-      - name: 这次预发仍然缺的运行时
+      - name: 这次预发做到哪、还缺什么
         run: |
           echo "契约钉来自 gfcc ${{ steps.vendor.outputs.gfcc_sha }}，L0 1.3.0。不打 stack-v*。"
           echo "zervi-rust 不部署。Win 或 Mac 仿真网关，经 nginx 或隧道访问 127.0.0.1:5210。"
-          echo "services/tatha 仍无 memory.recall，也不读 X-Actor-Sub。重建 Tatha 不会补上这条路由。"
-          echo "244b07f 仍把 sub 收成 sha256 的 X-User-Id。原样 X-Actor-Sub 不在本工作流。"
+          echo "Tatha 侧已接 memory.recall：/v1/ask + context.port_hint=memory，只读 X-Actor-Sub（原始 claims.sub）。"
+          echo "memory 存储结构由本次流水线显式迁移（compose/sql/gfcc-memory-v1.sql），不依赖 initdb.d。"
+          echo "仍未接：remember（需 participant，本次不授予）；网关尚不注入 X-Actor-Sub，M0 由 curl 带头发起。"
 
   require-deploy-config:
     name: dry_run=false 时配置必须齐
@@ -228,12 +233,20 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           import os, sys
+          from urllib.parse import quote
+
           pw = os.environ.get("PW", "")
           if not pw or any(ch in pw for ch in "$'\"\n\r\t "):
               sys.exit("缺少 STAGING_GFCC_DB_PASSWORD，或密码含空格、$、引号")
+
+          # 密码只经 quote 进 DSN：@ : / ? # 这类会破坏连接串的字符一律编码，
+          # 不依赖「密码恰好是 hex」这种约定。
+          dsn = "postgresql://gfcc:{}@gfcc-pgvector:5432/gfcc".format(quote(pw, safe=""))
+          path = os.path.join(os.environ["RUNNER_TEMP"], "gfcc.env")
+          fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+          with os.fdopen(fd, "w", encoding="utf-8") as f:
+              f.write(f"GFCC_DB_PASSWORD={pw}\nGFCC_DB_DSN={dsn}\n")
           PY
-          umask 077
-          printf 'GFCC_DB_PASSWORD=%s\n' "$PW" > "$RUNNER_TEMP/gfcc.env"
 
       - uses: webfactory/ssh-agent@v0.9.1
         with:
