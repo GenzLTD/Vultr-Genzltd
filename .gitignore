@@ -19,7 +19,9 @@ local/tmp-*.json
 *.env
 !.env.example
 !backend/.env.example
-# Tatha compose env_file 依赖仓内桩（空值）；真值只存在于预发机
+# Tatha 空值桩仍留仓内作本地开发参考；compose 已不引用它（stack-v0.1.7 部署
+# 实测 env_file 在生产机因 rsync 排除 *.env 而 config 解析失败，已移除）。
+# 真值密钥将来走 compose 插值（--env-file）或 environment 列表，不走此文件。
 !services/tatha/.env
 
 # 前端工作区

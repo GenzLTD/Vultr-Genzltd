@@ -118,8 +118,11 @@ services:
       # 解析为空串 ⇒ memory 端口返回 status=error 且不影响其余端点。
       # 注意：这是往既有 environment 列表**追加**一项，不改变上面三条已有变量。
       - GFCC_DB_DSN=${GFCC_DB_DSN:-}
-    env_file:
-      - ../services/tatha/.env
+    # 不用 env_file 引 services/tatha/.env：该桩只有两个空键且被上面 environment
+    # 同名项覆盖（compose 规则 environment > env_file），是零效果配置；而生产机
+    # rsync 带 --exclude='*.env' 且从不落 services/tatha/，env_file 会让
+    # `docker compose config` 直接解析失败（stack-v0.1.7 部署实测）。
+    # 将来真要给预发喂真值密钥，走 compose 插值（--env-file）或 environment 列表。
     networks:
       - looma-net
 
