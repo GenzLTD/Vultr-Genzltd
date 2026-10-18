@@ -72,6 +72,22 @@ set_kv STRIPE_CANCEL_URL https://tspace.genz.ltd/pricing?status=cancel
 set_kv STRIPE_TAX_ENABLED true
 set_kv STRIPE_TAX_CODE txcd_10103000
 
+# ── circle 生产化（gfcc kernel :5211）──────────────────────────────
+# GFCC_KERNEL_IMAGE 是基座 compose 的插值必需项（gfcc-kernel 的 image 用
+# ${GFCC_KERNEL_IMAGE:?}）：必须在**任何 docker compose 命令之前**进 .env，
+# 否则 compose 对全部服务的插值直接失败（连 build backend 都会炸——预发
+# run 39081711926 同因）。值由 deploy.yml 按 contracts/gfcc/SOURCE.json 的
+# pin 传入（gfcc-kernel:stage-<sha>）。非密钥，每轮对齐到本次发布的 pin。
+if [ -z "${GFCC_KERNEL_IMAGE:-}" ]; then
+  echo "REFUSE: GFCC_KERNEL_IMAGE 未传（deploy.yml 应按 SOURCE.json pin 传入）" >&2
+  exit 1
+fi
+set_kv GFCC_KERNEL_IMAGE "$GFCC_KERNEL_IMAGE"
+# ETHOS_AUTH_SECRET = circle 会场鉴权密钥；空 = stub（假 JWT 可建圈）。
+# 密钥语义走 seed_kv：仅缺失时写，机器是权威；公网开窗前由 deploy.yml
+# 的 nginx 门禁断言非空。
+seed_kv ETHOS_AUTH_SECRET "${ETHOS_AUTH_SECRET:-}"
+
 # ---- 仅缺失时写（密钥；机器是权威）----
 seed_kv JWT_SECRET "${JWT_SECRET:-}"
 seed_kv DEEPSEEK_API_KEY "${DEEPSEEK_API_KEY:-}"

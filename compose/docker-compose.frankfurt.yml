@@ -26,35 +26,14 @@ services:
     networks:
       - looma-net
 
-  # gfcc kernel（circle :5211）。镜像由 remote.sh 从 /opt/src/gfcc（pinned SHA）构建，
-  # tag 写进 .staging-gfcc.env 的 GFCC_KERNEL_IMAGE。存储是容器内 SQLite，落盘到卷：
-  # 这就是这一刀的"迁移"——SQLiteStore / CircleFlowStore 建表是 CREATE TABLE IF NOT
-  # EXISTS，容器首启即完成，没有 Postgres 迁移要跑。kernel 的 memory store 与 Tatha
-  # 用的 PG memory_record 是两套存储，互不读。
-  # ETHOS_AUTH_SECRET 留空 = stub 联调（与 5210 基线同口径）；LLM 槽 stub，不依赖 Ollama。
-  # 只绑 127.0.0.1，nginx include 未解，公网不可达。
+  # gfcc-kernel 服务定义已上移基座 compose/docker-compose.yml（2026-10-18
+  # circle 生产化）：预发与新加坡生产共用同一份定义（镜像 ${GFCC_KERNEL_IMAGE}
+  # 由 remote.sh 按 pin 写进 .staging-gfcc.env）。本 overlay 只保留预发专用的
+  # stub 鉴权覆盖：ETHOS_AUTH_SECRET 留空 = 假 JWT 可建圈，仅限回环联调；
+  # 新加坡由 deploy.yml 的 nginx 门禁强制该值非空。其余字段以基座为准。
   gfcc-kernel:
-    image: ${GFCC_KERNEL_IMAGE:?set GFCC_KERNEL_IMAGE in .staging-gfcc.env}
-    container_name: gfcc-kernel
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:5211:5211"
     environment:
-      STORE_PROVIDER: sqlite
-      STORE_DB_PATH: /app/data/memory.db
-      CIRCLE_FLOW_PROVIDER: sqlite
-      CIRCLE_FLOW_DB: /app/data/circle_flow.db
       ETHOS_AUTH_SECRET: ""
-      ETHOS_AUDIT_DB: /app/logs/audit.db
-      LLM_PROVIDER: stub
-      CONSENSUS_THRESHOLD: "85"
-    volumes:
-      - gfcc-kernel-data:/app/data
-      - gfcc-kernel-logs:/app/logs
-    networks:
-      - looma-net
 
 volumes:
   gfcc-pgvector-data:
-  gfcc-kernel-data:
-  gfcc-kernel-logs:

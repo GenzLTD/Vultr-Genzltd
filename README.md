@@ -157,7 +157,7 @@ bash scripts/release-tag.sh 0.1.0           # 允许打本地 tag；--push 被�
 
 收口顺序（以后，不是现在）：停 `looma-zervi` 的 `overseas-*` → `main` 上双门禁全绿（含 tspace 构建）→ 再谈第一个 `stack-v*` 与 `DEPLOY_ENABLED`。
 
-`circle.genz.ltd` 进现网必须是一次**单独的**后续 tag（解开 `nginx.conf` 里那行 include，且 kernel `:5211` 已在本机）。
+`circle.genz.ltd` 的 include 已随 circle 生产化 tag 解开：kernel 在基座 `compose/docker-compose.yml`（127.0.0.1:5211），deploy.yml reload nginx 前断言 kernel /health 200 且 `ETHOS_AUTH_SECRET` 非空（空=stub，假 JWT 可建圈）；DNS 切换是健康绿之后的人工动作。
 
 ---
 

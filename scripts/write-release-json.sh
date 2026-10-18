@@ -47,8 +47,8 @@ doc = {
         "kernel": pin.get("kernel"),
     },
     "circle": {
-        "enabled": False,
-        "reason": "snippet in nginx/sites/; production nginx.conf include stays commented until a later tag",
+        "enabled": True,
+        "reason": "kernel now in base compose (127.0.0.1:5211); nginx include opened and gated by deploy.yml (kernel /health 200 + ETHOS_AUTH_SECRET non-empty) before reload; DNS switch is a manual follow-up after local health is green",
         "host_desired": (pin.get("circle") or {}).get("host_desired"),
         "snippet": (pin.get("circle") or {}).get("snippet"),
     },

@@ -83,10 +83,17 @@ c1="$(snap looma-chromadb)"
 
 COMPOSE="docker compose --env-file $REPO/.staging-gfcc.env -f $REPO/compose/docker-compose.yml -f $REPO/compose/docker-compose.frankfurt.yml -p looma-zervi"
 # GFCC_KERNEL_IMAGE 必须在任何 $COMPOSE 命令之前进 env 文件：compose 对全部服务
-# 插值，overlay 里 gfcc-kernel 的 image 引用它，缺了连 build tatha 都会炸
+# 插值，基座 compose 里 gfcc-kernel 的 image 引用它，缺了连 build tatha 都会炸
 #（run 39081711926 的根因）。
 sed -i '/^GFCC_KERNEL_IMAGE=/d' "$REPO/.staging-gfcc.env"
 printf 'GFCC_KERNEL_IMAGE=gfcc-kernel:stage-%s\n' "$GFCC_SHA" >> "$REPO/.staging-gfcc.env"
+
+# 本提交把 gfcc-kernel 上移基座 compose（circle 生产化，与新加坡同款定义）：
+# 预发要证明「只用基座单文件也能解析出 kernel 服务」，overlay 只剩 stub 覆盖。
+docker compose --env-file "$REPO/.staging-gfcc.env" -f "$REPO/compose/docker-compose.yml" config \
+  | grep -q 'gfcc-kernel' \
+  || { echo "REFUSE: 基座 compose 单文件里解析不出 gfcc-kernel 服务" >&2; exit 1; }
+echo "OK 基座 compose 含 gfcc-kernel（circle 生产化同款定义）"
 docker image inspect "looma-zervi-tatha:pre-$VULTR_SHA" >/dev/null 2>&1 \
   || docker tag looma-zervi-tatha:latest "looma-zervi-tatha:pre-$VULTR_SHA" \
   || true
@@ -183,10 +190,11 @@ esac
 rm -f /tmp/recall-smoke.json
 
 # ---- gfcc kernel（circle :5211）预发实例 ----
-# 源码不进预发包：gfcc 是 public 仓，机器直接拉 pinned SHA。镜像 tag 带 SHA，
-# compose 用 .staging-gfcc.env 里的 GFCC_KERNEL_IMAGE 插值。存储是容器内 SQLite
-# （data/memory.db、data/circle_flow.db），CREATE TABLE IF NOT EXISTS 首启即建，
-# 没有 Postgres 迁移。ETHOS_AUTH_SECRET 留空走 stub 鉴权（预发联调口径）。
+# 服务定义在基座 compose（本提交上移）。源码不进预发包：gfcc 是 public 仓，
+# 机器直接拉 pinned SHA。镜像 tag 带 SHA，compose 用 .staging-gfcc.env 里的
+# GFCC_KERNEL_IMAGE 插值。存储是容器内 SQLite（data/memory.db、
+# data/circle_flow.db），CREATE TABLE IF NOT EXISTS 首启即建，没有 Postgres
+# 迁移。ETHOS_AUTH_SECRET 空 = stub 鉴权（overlay 显式覆盖，预发联调口径）。
 KERNEL_SRC=/opt/src/gfcc
 if [ -d "$KERNEL_SRC/.git" ]; then
   git -C "$KERNEL_SRC" fetch --depth=1 origin "$GFCC_SHA" >/dev/null 2>&1
