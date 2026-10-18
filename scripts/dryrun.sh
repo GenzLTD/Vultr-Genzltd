@@ -33,7 +33,10 @@ PROBE_PORT=15200
 RUNTIME=1
 [ "${1:-}" = "--static" ] && RUNTIME=0
 
-ALLOWED_PUBLISHED="127.0.0.1:5200 127.0.0.1:5210"
+ALLOWED_PUBLISHED="127.0.0.1:5200 127.0.0.1:5210 127.0.0.1:5211"
+# 基座 compose 的 gfcc-kernel 用 ${GFCC_KERNEL_IMAGE:?} 插值：干跑只做静态校验，
+# 不构建镜像，这里给占位值（真值由部署流水线按 SOURCE.json pin 写进 env 文件）。
+export GFCC_KERNEL_IMAGE="${GFCC_KERNEL_IMAGE:-gfcc-kernel:dryrun-placeholder}"
 PY=""
 if [ -n "${PYTHON_BIN:-}" ] && "$PYTHON_BIN" -c "import sys" >/dev/null 2>&1; then
   PY="$PYTHON_BIN"
@@ -176,7 +179,7 @@ import json, sys
 rendered, allowed_list = sys.argv[1], sys.argv[2].split()
 d = json.load(open(rendered, encoding="utf-8"))
 svcs = d.get("services", {})
-expected = {"backend", "chromadb", "redis", "tatha"}
+expected = {"backend", "chromadb", "redis", "tatha", "gfcc-kernel"}
 rc = 0
 if set(svcs) != expected:
     print(f"  \033[31m✗\033[0m 服务集合异常: {sorted(svcs)} != {sorted(expected)}")
@@ -228,6 +231,7 @@ else
   out="$(docker run --rm --entrypoint nginx \
     -v "$NGINX_CONF:/etc/nginx/nginx.conf:ro" \
     -v "$SSL_DIR:/etc/nginx/ssl:ro" \
+    -v "$ROOT/nginx/sites:/opt/vultr-genzltd-stack/current/nginx/sites:ro" \
     "$img" -t 2>&1)"
   printf '%s\n' "$out" | sed 's/^/     /'
   if printf '%s' "$out" | grep -q "syntax is ok"; then
@@ -281,19 +285,20 @@ else
 fi
 
 CIRCLE_SNIPPET="$ROOT/nginx/sites/circle.genz.ltd.conf"
-runpy - "$NGINX_CONF" "$CIRCLE_SNIPPET" <<'PY'
+runpy - "$NGINX_CONF" "$CIRCLE_SNIPPET" "$COMPOSE" <<'PY'
 import re, sys
-main, snippet = sys.argv[1], sys.argv[2]
+main, snippet, compose_path = sys.argv[1], sys.argv[2], sys.argv[3]
 main_text = open(main, encoding="utf-8").read()
+compose_text = open(compose_path, encoding="utf-8").read()
 rc = 0
 tokens = []
 for m in re.finditer(r"(?m)^\s*server_name\s+([^;]+);", main_text):
     tokens.extend(t for t in m.group(1).split() if t)
 if "circle.genz.ltd" in tokens:
-    print("  \033[31m✗\033[0m 现行 nginx.conf 已有 server_name circle.genz.ltd —— 必须走独立 tag 解开，禁止混进默认 conf")
+    print("  \033[31m✗\033[0m 现行 nginx.conf 已有 server_name circle.genz.ltd —— Host 只能来自 sites/ 片段，禁止混进主 conf")
     rc = 1
 else:
-    print("  \033[32m✓\033[0m 现行 nginx.conf 尚未收 circle.genz.ltd（片段另存）")
+    print("  \033[32m✓\033[0m nginx.conf 主文件无 circle.genz.ltd（Host 来自 include 的片段）")
 try:
     snip = open(snippet, encoding="utf-8").read()
 except FileNotFoundError:
@@ -308,12 +313,30 @@ if "127.0.0.1:5211" not in snip:
     print("  \033[31m✗\033[0m circle 片段未指向回环 127.0.0.1:5211")
     rc = 1
 else:
-    print("  \033[32m✓\033[0m circle 片段上游 127.0.0.1:5211（kernel 未进 compose 前不得解开 include）")
+    print("  \033[32m✓\033[0m circle 片段上游 127.0.0.1:5211")
 if "location /circle/" not in snip:
     print("  \033[31m✗\033[0m circle 片段缺少 location /circle/")
     rc = 1
 else:
     print("  \033[32m✓\033[0m circle 路径 /circle/")
+# include 已解开（circle 生产化窗口）：
+if re.search(r"(?m)^\s*include\s+/opt/vultr-genzltd-stack/current/nginx/sites/circle\.genz\.ltd\.conf\s*;", main_text):
+    print("  \033[32m✓\033[0m nginx.conf include 已解开（本窗口期望态）")
+else:
+    print("  \033[31m✗\033[0m nginx.conf include 未解开（circle 生产化窗口应解开）")
+    rc = 1
+# 干闸：include 可以解开，前提是 kernel 服务已在新加坡实际使用的那份 compose 里
+# （compose/docker-compose.yml 就是 deploy.yml rsync 到 SG 的唯一 compose）。
+kernel_in_compose = (
+    re.search(r"(?m)^\s{2}gfcc-kernel:\s*$", compose_text) is not None
+    and "127.0.0.1:5211:5211" in compose_text
+    and "${GFCC_KERNEL_IMAGE" in compose_text
+)
+if kernel_in_compose:
+    print("  \033[32m✓\033[0m 基座 compose 已含 gfcc-kernel（127.0.0.1:5211，镜像按 pin 插值）——include 解开的前提成立")
+else:
+    print("  \033[31m✗\033[0m include 已解开但基座 compose 没有 gfcc-kernel —— DNS 指过去会是空机器，禁止此组合")
+    rc = 1
 sys.exit(rc)
 PY
 [ $? -ne 0 ] && fail=1

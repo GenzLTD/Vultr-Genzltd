@@ -15,7 +15,7 @@
 #              needs: [backend-test, saas-build, contract-gate]
 #              if: 三项全绿 且 DEPLOY_ENABLED 且（tag 或 dispatch 非 dry_run）
 #                  ▼
-#               deploy  8 步串行
+#               deploy  9 步串行（含 kernel 构建、开窗双门禁）
 #
 #   部署门已开：vars.DEPLOY_ENABLED 已由 looma-zervi 海外部署 CI 有意置为 true，
 #   故 push tag stack-v* 即真实部署到 Vultr SG（见 vars.DEPLOY_HOST），且无审批拦截。
@@ -288,18 +288,25 @@ jobs:
           STRIPE_SECRET_KEY: ${{ secrets.ENV_STRIPE_SECRET_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.ENV_STRIPE_WEBHOOK_SECRET }}
           QCC_MCP_BASE_URL: ${{ vars.QCC_MCP_BASE_URL }}
+          ETHOS_AUTH_SECRET: ${{ secrets.VULTR_ETHOS_AUTH_SECRET || secrets.ENV_ETHOS_AUTH_SECRET }}
         run: |
           set -euo pipefail
+          # kernel 镜像 tag 必须先于任何 docker compose 命令进 .env：基座 compose
+          # 的 gfcc-kernel 用 ${GFCC_KERNEL_IMAGE:?} 插值，compose 对全部服务插值，
+          # 缺了连 build backend 都会解析失败（预发 run 39081711926 同因）。
+          GFCC_SHA="$(python3 -c "import json;print(json.load(open('contracts/gfcc/SOURCE.json'))['commit'])")"
+          echo "GFCC_SHA=$GFCC_SHA" >> "$GITHUB_ENV"
           $SSH_CMD "$DEPLOY_TARGET" "mkdir -p $STACK_DIR/scripts"
           scp -o BatchMode=yes scripts/env-kv.sh scripts/bootstrap-env.sh \
             "$DEPLOY_TARGET:$STACK_DIR/scripts/"
           $SSH_CMD "$DEPLOY_TARGET" \
             "DEPLOY_PATH=$DEPLOY_PATH STACK_DIR=$STACK_DIR ENV_FILE=$DEPLOY_PATH/backend/.env \
+             GFCC_KERNEL_IMAGE='gfcc-kernel:stage-$GFCC_SHA' \
              JWT_SECRET='$JWT_SECRET' DEEPSEEK_API_KEY='$DEEPSEEK_API_KEY' \
              OPENAI_API_KEY='$OPENAI_API_KEY' QCC_AUTH_TOKEN='$QCC_AUTH_TOKEN' \
              GOOGLE_CLIENT_ID='$GOOGLE_CLIENT_ID' GOOGLE_CLIENT_SECRET='$GOOGLE_CLIENT_SECRET' \
              STRIPE_SECRET_KEY='$STRIPE_SECRET_KEY' STRIPE_WEBHOOK_SECRET='$STRIPE_WEBHOOK_SECRET' \
-             QCC_MCP_BASE_URL='$QCC_MCP_BASE_URL' \
+             QCC_MCP_BASE_URL='$QCC_MCP_BASE_URL' ETHOS_AUTH_SECRET='$ETHOS_AUTH_SECRET' \
              bash $STACK_DIR/scripts/bootstrap-env.sh"
 
       - name: "3 rsync 本仓期望态 → STACK_DIR/releases/<tag>（不 --delete 现网 /opt）"
@@ -350,11 +357,77 @@ jobs:
             "$DEPLOY_TARGET:/var/www/saas/dist/"
           $SSH_CMD "$DEPLOY_TARGET" "find /var/www/saas/dist -type f | wc -l"
 
-      - name: "6 nginx：本仓 nginx/nginx.conf → /etc；-t 过了才 reload（不停 80/443）"
+      - name: "6 gfcc kernel：按 pin 拉源码构建 + up + 本机健康（nginx reload 之前）"
         run: |
-          $SSH_CMD "$DEPLOY_TARGET" "bash -s" << NGINX
+          $SSH_CMD "$DEPLOY_TARGET" "DEPLOY_PATH=$DEPLOY_PATH STACK_DIR=$STACK_DIR GFCC_SHA='$GFCC_SHA' bash -s" << KERNEL
           set -euo pipefail
-          SRC="$STACK_DIR/current/nginx/nginx.conf"
+          # 源码与预发同口径：public 仓直接拉 pinned SHA 到 /opt/src/gfcc。
+          if [ -d /opt/src/gfcc/.git ]; then
+            git -C /opt/src/gfcc fetch --depth=1 origin "\$GFCC_SHA" >/dev/null 2>&1
+          else
+            git clone --no-checkout https://github.com/GenzLTD/gfcc /opt/src/gfcc >/dev/null 2>&1
+          fi
+          git -C /opt/src/gfcc fetch --depth=1 origin "\$GFCC_SHA" >/dev/null 2>&1 \
+            || { echo "REFUSE: gfcc 源码拉取失败（sha=\$GFCC_SHA）" >&2; exit 1; }
+          git -C /opt/src/gfcc checkout --detach --force FETCH_HEAD >/dev/null 2>&1
+          ksha="\$(git -C /opt/src/gfcc rev-parse HEAD)"
+          [ "\$ksha" = "\$GFCC_SHA" ] || { echo "REFUSE: kernel 源码 HEAD=\$ksha 不是 \$GFCC_SHA" >&2; exit 1; }
+
+          kimg="gfcc-kernel:stage-\$GFCC_SHA"
+          # Dockerfile 随本 tag 的 release 快照走（rsync 整树 → current/）。
+          docker build -f "\$STACK_DIR/current/docker/Dockerfile.gfcc-kernel" -t "\$kimg" /opt/src/gfcc \
+            || { echo "REFUSE: kernel 镜像构建失败" >&2; exit 1; }
+
+          # GFCC_KERNEL_IMAGE 已由第 2 步写进 backend/.env（--env-file），
+          # 这里任何 compose 命令都能解析基座 compose 全部服务。
+          COMPOSE="docker compose --env-file \$DEPLOY_PATH/backend/.env -f \$DEPLOY_PATH/docker/docker-compose.yml -p looma-zervi"
+
+          # 端口占用预检：若 :5211 已被非 compose 进程占住（历史裸 uvicorn 残留），
+          # up 会绑口失败——先给出可操作的报错而不是 docker 的裸堆栈。
+          if curl -sf --max-time 3 http://127.0.0.1:5211/health >/dev/null 2>&1 \
+             && ! docker ps --format '{{.Names}}' | grep -qx 'gfcc-kernel'; then
+            echo "REFUSE: 127.0.0.1:5211 被非 compose 进程占用（疑似历史裸 uvicorn 残留）。" >&2
+            echo "       先人工确认并停掉该进程（ ss -ltnp | grep 5211 ），再重跑本次部署。" >&2
+            exit 1
+          fi
+
+          \$COMPOSE up -d --no-deps gfcc-kernel
+
+          ok=0; i=1
+          while [ "\$i" -le 30 ]; do
+            if curl -sf --max-time 5 http://127.0.0.1:5211/health | grep -q 'sqlite'; then ok=1; break; fi
+            sleep 2; i=\$((i + 1))
+          done
+          [ "\$ok" = 1 ] || { echo "REFUSE: kernel /health 60 秒内未就绪（先看 docker logs gfcc-kernel）" >&2; exit 1; }
+          p="\$(docker port gfcc-kernel 5211/tcp | head -n 1)"
+          [ "\$p" = "127.0.0.1:5211" ] || { echo "REFUSE: kernel 端口 \$p" >&2; exit 1; }
+          # SQLite 落盘 = kernel 的「迁移」：两库必须真的在卷上，不是内存 stub。
+          for dbf in data/memory.db data/circle_flow.db; do
+            docker exec gfcc-kernel test -s "/app/\$dbf" \
+              || { echo "REFUSE: kernel SQLite 库未落盘：\$dbf（STORE_PROVIDER 未生效？）" >&2; exit 1; }
+          done
+          echo "OK kernel：\$kimg 已起，127.0.0.1:5211 /health 200，SQLite 落盘"
+          KERNEL
+
+      - name: "7 nginx：kernel 健康 + ETHOS_AUTH_SECRET 非空 → 才 -t + reload（不停 80/443）"
+        run: |
+          $SSH_CMD "$DEPLOY_TARGET" "STACK_DIR=$STACK_DIR DEPLOY_PATH=$DEPLOY_PATH bash -s" << NGINX
+          set -euo pipefail
+          # ── circle 生产窗口门禁（include 已随本 tag 解开）────────────
+          # 1) kernel 必须已在本机 :5211 就绪：include 指向它，不就绪就 reload
+          #    = 公网 502。此门禁失败时 nginx 不 reload、DNS 也不该切。
+          if ! curl -sf --max-time 5 http://127.0.0.1:5211/health >/dev/null; then
+            echo "REFUSE: kernel 127.0.0.1:5211 未就绪——不 reload nginx（include 已解开，DNS 保持不切）" >&2
+            exit 1
+          fi
+          # 2) ETHOS_AUTH_SECRET 为空 = stub 鉴权，假 JWT 就能建圈。公网开窗前必须非空。
+          #    先在 secrets 配 VULTR_ETHOS_AUTH_SECRET，再重发本 tag。
+          sec="\$(sed -n 's/^ETHOS_AUTH_SECRET=//p' "\$DEPLOY_PATH/backend/.env" | head -n 1)"
+          if [ -z "\$sec" ]; then
+            echo "REFUSE: ETHOS_AUTH_SECRET 为空（stub 鉴权）——不 reload nginx、不切 DNS。先配 secrets.VULTR_ETHOS_AUTH_SECRET 再发。" >&2
+            exit 1
+          fi
+          SRC="\$STACK_DIR/current/nginx/nginx.conf"
           if [ ! -f "\$SRC" ]; then
             echo "REFUSE: 缺少 \$SRC（必须是本仓 nginx/nginx.conf）" >&2
             exit 1
@@ -370,10 +443,10 @@ jobs:
             systemctl start nginx
           fi
           systemctl is-active --quiet nginx
-          echo "nginx reloaded from \$SRC"
+          echo "nginx reloaded from \$SRC（include: circle.genz.ltd 已生效，DNS 由人工在健康绿后切换）"
           NGINX
 
-      - name: "7 Docker：git_commit 先写；hash marker 决定是否重建；不 down 整栈"
+      - name: "8 Docker：git_commit 先写；hash marker 决定是否重建；不 down 整栈"
         run: |
           $SSH_CMD "$DEPLOY_TARGET" "bash -s" << DOCKER
           set -euo pipefail
@@ -428,11 +501,11 @@ jobs:
           echo "=== 端口收内网 OK \$b ==="
           DOCKER
 
-      - name: "8a 本机健康（5200 + Host api.genz.ltd）"
+      - name: "9a 本机健康（5200 + Host api.genz.ltd）"
         run: |
           $SSH_CMD "$DEPLOY_TARGET" "bash $STACK_DIR/current/scripts/healthcheck.sh"
 
-      - name: "8b 公网健康（只断言本管线：api + tspace；不替 Vercel 背书）"
+      - name: "9b 公网健康（只断言本管线：api + tspace；不替 Vercel 背书）"
         run: |
           set -euo pipefail
           echo "=== https://api.genz.ltd/health ==="
@@ -452,7 +525,7 @@ jobs:
           echo "HTTP ${REG_CODE}"
           [ "${REG_CODE}" = "200" ] || { echo "::error::tspace /register 期望 200"; exit 1; }
 
-      - name: "8c 发布后契约复跑（线上 /v1/endpoints ↔ 前端 bundle，matrix 必须 200）"
+      - name: "9c 发布后契约复跑（线上 /v1/endpoints ↔ 前端 bundle，matrix 必须 200）"
         run: |
           bash scripts/post-deploy-contract.sh
 

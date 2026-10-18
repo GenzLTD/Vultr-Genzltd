@@ -126,10 +126,47 @@ services:
     networks:
       - looma-net
 
+  # ============================================
+  # gfcc kernel（circle :5211）
+  # 2026-10-18 起进基座 compose：新加坡生产与法兰克福预发共用此定义。
+  # 镜像由部署流水线按 contracts/gfcc/SOURCE.json 的 pin 从 /opt/src/gfcc
+  # 构建（docker/Dockerfile.gfcc-kernel），并在**任何 docker compose 命令之前**
+  # 把 GFCC_KERNEL_IMAGE 写进 --env-file —— compose 对全部服务插值，缺了连
+  # build tatha 都会炸（预发 run 39081711926 的根因）。
+  # 存储：容器内 SQLite 落盘到卷（CREATE TABLE IF NOT EXISTS 首启即建，
+  # 无 Postgres 迁移）；kernel 的 memory store 与 Tatha 的 PG memory_record
+  # 是两套存储，互不读。
+  # ETHOS_AUTH_SECRET 留空 = stub 鉴权（假 JWT 可建圈）：法兰克福预发回环
+  # 继续用 stub；新加坡公网开窗前由 deploy.yml 的 nginx 门禁强制非空。
+  # ============================================
+  gfcc-kernel:
+    image: ${GFCC_KERNEL_IMAGE:?set GFCC_KERNEL_IMAGE (deploy 流水线按 SOURCE.json pin 构建后写入 env 文件)}
+    container_name: gfcc-kernel
+    restart: unless-stopped
+    ports:
+      # 收内网：仅宿主回环。circle.genz.ltd 的 nginx 片段反代 127.0.0.1:5211。
+      - "127.0.0.1:5211:5211"
+    environment:
+      STORE_PROVIDER: sqlite
+      STORE_DB_PATH: /app/data/memory.db
+      CIRCLE_FLOW_PROVIDER: sqlite
+      CIRCLE_FLOW_DB: /app/data/circle_flow.db
+      ETHOS_AUTH_SECRET: ${ETHOS_AUTH_SECRET:-}
+      ETHOS_AUDIT_DB: /app/logs/audit.db
+      LLM_PROVIDER: stub
+      CONSENSUS_THRESHOLD: "85"
+    volumes:
+      - gfcc-kernel-data:/app/data
+      - gfcc-kernel-logs:/app/logs
+    networks:
+      - looma-net
+
 volumes:
   backend-data:
   chroma-data:
   redis-data:
+  gfcc-kernel-data:
+  gfcc-kernel-logs:
 
 networks:
   looma-net:
