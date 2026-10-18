@@ -82,6 +82,11 @@ r1="$(snap looma-redis)"
 c1="$(snap looma-chromadb)"
 
 COMPOSE="docker compose --env-file $REPO/.staging-gfcc.env -f $REPO/compose/docker-compose.yml -f $REPO/compose/docker-compose.frankfurt.yml -p looma-zervi"
+# GFCC_KERNEL_IMAGE 必须在任何 $COMPOSE 命令之前进 env 文件：compose 对全部服务
+# 插值，overlay 里 gfcc-kernel 的 image 引用它，缺了连 build tatha 都会炸
+#（run 39081711926 的根因）。
+sed -i '/^GFCC_KERNEL_IMAGE=/d' "$REPO/.staging-gfcc.env"
+printf 'GFCC_KERNEL_IMAGE=gfcc-kernel:stage-%s\n' "$GFCC_SHA" >> "$REPO/.staging-gfcc.env"
 docker image inspect "looma-zervi-tatha:pre-$VULTR_SHA" >/dev/null 2>&1 \
   || docker tag looma-zervi-tatha:latest "looma-zervi-tatha:pre-$VULTR_SHA" \
   || true
@@ -197,8 +202,6 @@ ksha="$(git -C "$KERNEL_SRC" rev-parse HEAD)"
 kimg="gfcc-kernel:stage-$GFCC_SHA"
 docker build -f "$REPO/docker/Dockerfile.gfcc-kernel" -t "$kimg" "$KERNEL_SRC" \
   || { echo "REFUSE: kernel 镜像构建失败" >&2; exit 1; }
-sed -i '/^GFCC_KERNEL_IMAGE=/d' "$REPO/.staging-gfcc.env"
-printf 'GFCC_KERNEL_IMAGE=%s\n' "$kimg" >> "$REPO/.staging-gfcc.env"
 
 $COMPOSE up -d --no-deps gfcc-kernel
 
