@@ -89,10 +89,13 @@ sed -i '/^GFCC_KERNEL_IMAGE=/d' "$REPO/.staging-gfcc.env"
 printf 'GFCC_KERNEL_IMAGE=gfcc-kernel:stage-%s\n' "$GFCC_SHA" >> "$REPO/.staging-gfcc.env"
 
 # 本提交把 gfcc-kernel 上移基座 compose（circle 生产化，与新加坡同款定义）：
-# 预发要证明「只用基座单文件也能解析出 kernel 服务」，overlay 只剩 stub 覆盖。
-docker compose --env-file "$REPO/.staging-gfcc.env" -f "$REPO/compose/docker-compose.yml" config \
-  | grep -q 'gfcc-kernel' \
-  || { echo "REFUSE: 基座 compose 单文件里解析不出 gfcc-kernel 服务" >&2; exit 1; }
+# 预发要证明「服务定义已在基座单文件里」，overlay 只剩 stub 覆盖。
+# 注意不能对基座跑全量 `docker compose config` 渲染：法兰克福 src 检出刻意没有
+# backend/.env，backend 的 env_file 会让全量渲染直接失败（与 kernel 无关；
+# 2026-10-18 run 39085585622 实测）。定义存在性用文本断言，功能证明由下面的
+# build/up + /health + SQLite 落盘承担。
+grep -q '^  gfcc-kernel:' "$REPO/compose/docker-compose.yml" \
+  || { echo "REFUSE: 基座 compose 单文件里没有 gfcc-kernel 服务定义" >&2; exit 1; }
 echo "OK 基座 compose 含 gfcc-kernel（circle 生产化同款定义）"
 docker image inspect "looma-zervi-tatha:pre-$VULTR_SHA" >/dev/null 2>&1 \
   || docker tag looma-zervi-tatha:latest "looma-zervi-tatha:pre-$VULTR_SHA" \
