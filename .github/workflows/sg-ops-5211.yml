@@ -1,0 +1,73 @@
+# 临时运维：新加坡 5211 端口残留清理（run 39087095209 端口预检 REFUSE 的处置工具）
+# 只提供两个受限动作，不接受任意命令输入：
+#   inspect  — 只读：ss / docker ps / 进程命令行，查清 5211 占用者
+#   stop5211 — 停掉占用 5211 的非 docker-proxy 进程（2026-10-18 用户预授权：先停掉再重跑）
+# 清理完成后本文件应删除（或保留至 circle 窗口收口后统一清）。
+name: SG Ops (5211 residue)
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'inspect | stop5211'
+        required: true
+        default: 'inspect'
+
+jobs:
+  ops:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH 装配（与 deploy.yml 同源密钥）
+        env:
+          SSH_HOST: ${{ vars.DEPLOY_HOST }}
+          SSH_USER: ${{ vars.DEPLOY_USER || secrets.VULTR_SSH_USER || 'root' }}
+        run: |
+          if [ -z "$SSH_HOST" ]; then echo "::error::缺 DEPLOY_HOST"; exit 1; fi
+          echo "SSH_HOST=$SSH_HOST" >> "$GITHUB_ENV"
+          echo "SSH_USER=$SSH_USER" >> "$GITHUB_ENV"
+
+      - uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY || secrets.VULTR_SSH_PRIVATE_KEY }}
+
+      - name: known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ env.SSH_HOST }}" >> ~/.ssh/known_hosts
+          echo 'SSH_CMD=ssh -o BatchMode=yes -o StrictHostKeyChecking=yes' >> "$GITHUB_ENV"
+
+      - name: inspect（只读）
+        if: github.event.inputs.action == 'inspect'
+        run: |
+          $SSH_CMD "${{ env.SSH_USER }}@${{ env.SSH_HOST }}" 'bash -s' << 'EOS'
+          echo "=== ss :5211 ==="; ss -ltnp | grep ':5211 ' || echo "(无监听)"
+          echo "=== docker 相关容器 ==="; docker ps -a --format "{{.Names}} {{.Ports}} {{.Status}}" | grep 5211 || echo "(无容器占 5211)"
+          echo "=== 占用进程命令行 ==="
+          for pid in $(ss -ltnp | grep ':5211 ' | grep -oP 'pid=\K[0-9]+' | sort -u); do
+            echo "PID $pid: $(ps -p $pid -o user=,etime=,cmd=)"
+          done
+          EOS
+
+      - name: stop5211（停非 docker-proxy 占用者）
+        if: github.event.inputs.action == 'stop5211'
+        run: |
+          $SSH_CMD "${{ env.SSH_USER }}@${{ env.SSH_HOST }}" 'bash -s' << 'EOS'
+          set -u
+          echo "=== 停前快照 ==="; ss -ltnp | grep ':5211 ' || echo "(无监听)"
+          killed=0
+          for pid in $(ss -ltnp | grep ':5211 ' | grep -oP 'pid=\K[0-9]+' | sort -u); do
+            cmd=$(ps -p $pid -o cmd=)
+            case "$cmd" in
+              *docker-proxy*) echo "跳过 docker-proxy PID $pid";;
+              *) echo "kill PID $pid: $cmd"; kill "$pid"; killed=1;;
+            esac
+          done
+          sleep 3
+          # 仍占口才升级 SIGKILL（同样放过 docker-proxy）
+          for pid in $(ss -ltnp | grep ':5211 ' | grep -oP 'pid=\K[0-9]+' | sort -u); do
+            cmd=$(ps -p $pid -o cmd=)
+            case "$cmd" in *docker-proxy*) :;; *) kill -9 "$pid" && echo "SIGKILL PID $pid";; esac
+          done
+          echo "=== 停后核验 ==="
+          if ss -ltn | grep -q ':5211 '; then echo "5211 仍被占用"; ss -ltnp | grep ':5211 '; exit 1; fi
+          echo "OK: 5211 已腾空"
+          EOS
