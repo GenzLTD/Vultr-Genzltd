@@ -176,3 +176,60 @@ case "$code" in
     ;;
 esac
 rm -f /tmp/recall-smoke.json
+
+# ---- gfcc kernel（circle :5211）预发实例 ----
+# 源码不进预发包：gfcc 是 public 仓，机器直接拉 pinned SHA。镜像 tag 带 SHA，
+# compose 用 .staging-gfcc.env 里的 GFCC_KERNEL_IMAGE 插值。存储是容器内 SQLite
+# （data/memory.db、data/circle_flow.db），CREATE TABLE IF NOT EXISTS 首启即建，
+# 没有 Postgres 迁移。ETHOS_AUTH_SECRET 留空走 stub 鉴权（预发联调口径）。
+KERNEL_SRC=/opt/src/gfcc
+if [ -d "$KERNEL_SRC/.git" ]; then
+  git -C "$KERNEL_SRC" fetch --depth=1 origin "$GFCC_SHA" >/dev/null 2>&1
+else
+  git clone --no-checkout https://github.com/GenzLTD/gfcc "$KERNEL_SRC" >/dev/null 2>&1
+fi
+git -C "$KERNEL_SRC" fetch --depth=1 origin "$GFCC_SHA" >/dev/null 2>&1 \
+  || { echo "REFUSE: gfcc 源码拉取失败（$KERNEL_SRC，sha=$GFCC_SHA）" >&2; exit 1; }
+git -C "$KERNEL_SRC" checkout --detach --force FETCH_HEAD >/dev/null 2>&1
+ksha="$(git -C "$KERNEL_SRC" rev-parse HEAD)"
+[ "$ksha" = "$GFCC_SHA" ] || { echo "REFUSE: kernel 源码 HEAD=$ksha 不是 $GFCC_SHA" >&2; exit 1; }
+
+kimg="gfcc-kernel:stage-$GFCC_SHA"
+docker build -f "$REPO/docker/Dockerfile.gfcc-kernel" -t "$kimg" "$KERNEL_SRC" \
+  || { echo "REFUSE: kernel 镜像构建失败" >&2; exit 1; }
+sed -i '/^GFCC_KERNEL_IMAGE=/d' "$REPO/.staging-gfcc.env"
+printf 'GFCC_KERNEL_IMAGE=%s\n' "$kimg" >> "$REPO/.staging-gfcc.env"
+
+$COMPOSE up -d --no-deps gfcc-kernel
+
+khealthy=0
+i=1
+while [ "$i" -le 30 ]; do
+  if curl -sf --max-time 5 http://127.0.0.1:5211/health; then
+    khealthy=1
+    echo
+    break
+  fi
+  sleep 2
+  i=$((i + 1))
+done
+[ "$khealthy" = 1 ] || { echo "REFUSE: kernel /health 60 秒内未就绪，先看 docker logs gfcc-kernel" >&2; exit 1; }
+kport="$(docker port gfcc-kernel 5211/tcp | head -n 1)"
+[ "$kport" = "127.0.0.1:5211" ] || { echo "REFUSE: kernel 端口 $kport" >&2; exit 1; }
+
+# SQLite 落盘校验 = 这一刀的迁移验证：库文件必须真的在卷上，不能是内存 stub。
+for dbf in data/memory.db data/circle_flow.db; do
+  docker exec gfcc-kernel test -s "/app/$dbf" \
+    || { echo "REFUSE: kernel SQLite 库未落盘：$dbf（STORE_PROVIDER 未生效？）" >&2; exit 1; }
+done
+echo "OK kernel SQLite 落盘：memory.db / circle_flow.db"
+
+# /circle/ 会场入口冒烟（nginx include 仍未解，这只打本机回环）。
+ccode="$(curl -s -o /tmp/circle-smoke.html -w '%{http_code}' --max-time 10 http://127.0.0.1:5211/circle/ || true)"
+[ "$ccode" = "200" ] || { echo "REFUSE: kernel /circle/ HTTP $ccode" >&2; exit 1; }
+grep -qi "circle" /tmp/circle-smoke.html || { echo "REFUSE: /circle/ 响应不像会场页" >&2; exit 1; }
+rm -f /tmp/circle-smoke.html
+kver="$(grep -m1 '^version' "$KERNEL_SRC/services/gfcc_kernel/pyproject.toml" | sed 's/.*"\(.*\)".*/\1/')"
+
+printf 'vultr=%s\ngfcc=%s\nl0=1.3.0\nschema=memory.v1\nkernel=%s@%s\n' \
+  "$VULTR_SHA" "$GFCC_SHA" "$kver" "$(printf %s "$GFCC_SHA" | cut -c1-7)" > "$REPO/.staging-delivery"

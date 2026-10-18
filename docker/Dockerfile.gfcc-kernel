@@ -1,0 +1,27 @@
+# gfcc kernel（circle :5211）镜像。构建 context = gfcc 仓检出根：
+#   docker build -f docker/Dockerfile.gfcc-kernel -t gfcc-kernel:stage-<sha> /opt/src/gfcc
+# 只在法兰克福预发流水线使用；生产不动（nginx include 未解、DNS 未切、RELEASE.json 未开）。
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# kernel 依赖同级本地包 ethos（pyproject [tool.uv.sources] path="../ethos"），两个目录一起拷。
+# 注意：gfcc_kernel 的 pyproject 没配 package-data，pip 装出来的包缺 static/（circle.html 等），
+# app.py 挂载 StaticFiles 时会 RuntimeError。装完从源码树补拷 static/（gfcc 侧修复前一直需要）。
+COPY services/ethos /opt/ethos
+COPY services/gfcc_kernel /opt/gfcc_kernel
+
+RUN pip install --no-cache-dir /opt/ethos /opt/gfcc_kernel \
+    && cp -a /opt/gfcc_kernel/src/gfcc_kernel/static \
+       "$(python -c 'import gfcc_kernel, os; print(os.path.dirname(gfcc_kernel.__file__))')/"
+
+ENV PYTHONUNBUFFERED=1
+
+# 存储全在卷上（compose 挂 /app/data 与 /app/logs）：
+#   STORE_PROVIDER=sqlite → data/memory.db（store 槽 + signal_log，启动即建表）
+#   CIRCLE_FLOW_PROVIDER=sqlite → data/circle_flow.db（圈/共识/地板）
+#   ETHOS_AUDIT_DB → logs/audit.db
+# LLM 槽用 stub，不依赖 Ollama（run_gfcc_kernel.sh 的 :11434 等待不适用于容器）。
+EXPOSE 5211
+
+CMD ["uvicorn", "gfcc_kernel.app:app", "--host", "0.0.0.0", "--port", "5211"]
