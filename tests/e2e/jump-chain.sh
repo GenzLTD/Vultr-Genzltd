@@ -10,11 +10,15 @@
 #     5) app.genz.ltd → api.genz.ltd 登录接口存在（GET 405 / POST 4xx 而非 5xx）
 #     6) circle.genz.ltd → SG kernel（首页 200 + api/status 422 缺 circle_id）
 #     7) www.genz.ltd 单独报告落点（当前=Vercel 的 Genzer Terminal，Supabase 承载）
+#     8) admin 清理接口：无 token 必须 401/403；提供 E2E_ADMIN_TOKEN 时
+#        purge{dry_run:true} 必须 200（零副作用，不删任何数据）
 #
 #   用法:
 #     bash tests/e2e/jump-chain.sh              # 现网断言
 #     EXPECT_WWW=vercel bash tests/e2e/jump-chain.sh   # 把 www 落点也纳入硬断言
 #     EXPECT_WWW=sg   ...                       # 期望 www 已迁新加坡
+#     E2E_ADMIN_TOKEN=$(cat ~/.genz-secrets/e2e-admin.token) bash tests/e2e/jump-chain.sh
+#                                               # 追加 admin 正向断言（token 勿入库/勿写日志）
 #
 #   退出码：0 = 全部通过；1 = 有断言失败（明细见输出）
 # =============================================================
@@ -147,6 +151,35 @@ case "$EXPECT_WWW" in
   any)    info "www 落点仅报告，不硬断言（EXPECT_WWW=vercel|sg 可纳入门禁）" ;;
 esac
 [ "$c" = "200" ] && ok "www 首页可达 200" || bad "www 首页 → $c"
+
+echo "=== 8. admin 清理接口（需 E2E_ADMIN_TOKEN）==="
+API_BASE="${API_BASE:-https://api.genz.ltd}"
+# 负向先跑：不带 token 必须被拒（证明接口不是无鉴权）
+c=$(fetch "$API_BASE/v1/admin/test-accounts/purge" "$TMP/purge_anon.json" "$TMP/purge_anon.hdr" \
+      -X POST -H "Content-Type: application/json" --data '{"dry_run":true}')
+case "$c" in
+  401|403) ok "无 token → $c（清理接口要求鉴权）" ;;
+  200)     bad "无 token 竟返回 200 —— 清理接口缺鉴权" ;;
+  000)     info "无 token 探测未取到响应（网络/CF 拦截），跳过" ;;
+  *)       bad "无 token → $c（期望 401/403）" ;;
+esac
+
+if [ -z "${E2E_ADMIN_TOKEN:-}" ]; then
+  info "未提供 E2E_ADMIN_TOKEN —— 跳过 admin 正向断言"
+else
+  c=$(fetch "$API_BASE/v1/admin/test-accounts/purge" "$TMP/purge.json" "$TMP/purge.hdr" \
+        -X POST -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $E2E_ADMIN_TOKEN" \
+        --data '{"dry_run":true}')
+  if [ "$c" = "200" ] && grep -q '"dry_run": *true' "$TMP/purge.json"; then
+    m=$(pyjson "d.get('matched')" "$TMP/purge.json")
+    e=$(pyjson "d.get('eligible')" "$TMP/purge.json")
+    b=$(pyjson "d.get('blocked_by_paid')" "$TMP/purge.json")
+    ok "admin purge(dry_run) → 200（matched=$m eligible=$e blocked_by_paid=$b）"
+  else
+    bad "admin purge(dry_run) → $c（期望 200 + dry_run=true；403=role 非 admin，401=token 无效）"
+  fi
+fi
 
 echo
 echo "=== 汇总：$PASS passed, $FAIL failed ==="
