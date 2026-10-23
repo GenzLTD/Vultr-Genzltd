@@ -77,8 +77,6 @@ def settle_payment(
     tier = paid_order["tier"]
     plan_id = paid_order["plan_id"]
 
-    db.update_user_tier(user_id, tier)
-
     expires = (datetime.now() + timedelta(days=30)).isoformat()
     # 带 subscription_id 说明是真实 Stripe Subscription（会自动续费）；
     # 一次性付款不是。
@@ -86,9 +84,15 @@ def settle_payment(
         user_id, tier, plan_id, expires, auto_renew=bool(subscription_id),
     )
 
+    # tier 不再由本轨直写 —— 交给 entitlement 仲裁：
+    #   tier = max(两条轨上所有未过期订阅的 tier)
+    # 旧代码在这里 `db.update_user_tier(user_id, tier)`（last-write-wins），
+    # 会把用户在另一条轨（Apple IAP）上**档位更高且仍有效**的订阅反向拉低。
+    granted = db.recompute_user_tier(user_id)
+
     logger.info(
-        "[%s] Payment confirmed: user=%s tier=%s order=%s txn=%s sub=%s",
-        provider_name, user_id, tier, out_trade_no, transaction_id,
+        "[%s] Payment confirmed: user=%s order_tier=%s granted_tier=%s order=%s txn=%s sub=%s",
+        provider_name, user_id, tier, granted, out_trade_no, transaction_id,
         subscription_id or "-",
     )
     _record_payment_event(db, user_id, tier, out_trade_no, paid_order)

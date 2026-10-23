@@ -1718,11 +1718,69 @@ END;
         return self.get_user_by_id(user_id), True  # newly created
 
     def update_user_tier(self, user_id: str, tier: str):
+        """直接提/降档 —— 仅限管理后台或人工干预。
+
+        正常业务路径请改用 `recompute_user_tier()`：直接写 tier 是 last-write-wins，
+        会把另一条轨上仍然有效的订阅连带抹掉。
+        """
         with self.get_conn() as conn:
             conn.execute(
                 "UPDATE users SET tier = ?, updated_at = datetime('now') WHERE id = ?",
                 (tier, user_id)
             )
+
+    # tier 序，与 PG 的 tier_rank() 及 zervi-rust auth.rs 的层级保持一致
+    #   未知 tier → -99，永不取胜，避免脏字符串意外提权
+    TIER_RANK = {
+        "guest": -1, "free": 0, "supporter": 1, "pro": 2, "enterprise": 3,
+    }
+
+    def recompute_user_tier(self, user_id: str) -> str:
+        """entitlement 仲裁：tier = max(所有未过期订阅的 tier)，无有效订阅则 free。
+
+        取代「到期就直接 `UPDATE users SET tier='free'`」——那样会把用户在另一条
+        变现轨上**仍然有效**的订阅连带抹掉（已付费权益凭空消失）。
+
+        ⚠️ 范围限制：本方法只看**本库（SQLite）**的 subscriptions 表，即 Stripe 轨
+        自己这一轨。真正的跨轨仲裁（Stripe ∪ Apple IAP）在 PG 的
+        `recompute_user_tier()` + `v_active_entitlements` 视图里完成。
+        ⇒ 海外站接入 PG（单源权威工程）后，这里应改为调用 PG 版本；
+           本方法保留为同语义的本地兜底。
+        """
+        now = _dt_now()
+        best = "free"
+        best_rank = self.TIER_RANK["free"]
+
+        with self.get_conn() as conn:
+            rows = conn.execute(
+                """SELECT tier, expires_at FROM subscriptions
+                    WHERE user_id = ? AND lower(coalesce(status, 'active')) = 'active'""",
+                (user_id,),
+            ).fetchall()
+
+            for r in rows:
+                raw = r["expires_at"]
+                if not raw:
+                    continue
+                try:
+                    exp = datetime.fromisoformat(str(raw))
+                except (ValueError, TypeError):
+                    continue                      # 不可解析 ⇒ 视为无效期限
+                if exp.tzinfo is not None and now.tzinfo is None:
+                    exp = exp.replace(tzinfo=None)
+                if exp <= now:
+                    continue                      # 已过期，不贡献权益
+
+                t = str(r["tier"] or "free").lower()
+                rank = self.TIER_RANK.get(t, -99)  # 未知 tier 永不取胜
+                if rank > best_rank:
+                    best, best_rank = t, rank
+
+            conn.execute(
+                "UPDATE users SET tier = ?, updated_at = datetime('now') WHERE id = ?",
+                (best, user_id),
+            )
+        return best
 
     # ============================================
     # Usage tracking (joint)
@@ -4346,19 +4404,25 @@ END;
         return cur.rowcount > 0
 
     def expire_subscription(self, user_id: str) -> bool:
-        """Mark subscription as expired and downgrade user to free."""
+        """Mark subscription as expired and **recompute** the user's tier.
+
+        ⚠️ 旧实现在这里无条件 `UPDATE users SET tier='free'`，是 last-write-wins：
+        用户在另一条变现轨（Apple IAP / App 内购买）上**仍然有效**的订阅会被
+        本轨的到期动作连带抹掉 —— 已付费权益凭空消失。
+
+        现在改为：只把本轨订阅标记为 expired，tier 交给 `recompute_user_tier()`
+        裁决 —— 「没有任何未过期订阅」时才降级 free。
+        """
         with self.get_conn() as conn:
             cur = conn.execute(
                 """UPDATE subscriptions SET status = 'expired',
                    updated_at = datetime('now') WHERE user_id = ?""",
                 (user_id,),
             )
-            if cur.rowcount > 0:
-                conn.execute(
-                    "UPDATE users SET tier = 'free', updated_at = datetime('now') WHERE id = ?",
-                    (user_id,),
-                )
-        return cur.rowcount > 0
+            affected = cur.rowcount
+        if affected > 0:
+            self.recompute_user_tier(user_id)
+        return affected > 0
 
     # ============================================
     # Timeline: career time-series events
