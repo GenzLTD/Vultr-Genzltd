@@ -220,7 +220,7 @@ def upgrade_tier():
     plan = get_plan_for_tier(new_tier, region)
 
     # Stub 也走与微信/Stripe 回调相同的核销链：
-    #   建单(pending) → mark_order_paid → update_user_tier → upsert_subscription(+30天)
+    #   建单(pending) → mark_order_paid → upsert_subscription(+30天) → recompute_user_tier
     out_trade_no = generate_out_trade_no()
     db.create_order(
         user_id=g.user_id,
@@ -485,7 +485,7 @@ def wechat_pay_notify():
         resp, code = build_notify_response(False)
         return resp, code, {"Content-Type": "application/json"}
 
-    # 处理业务逻辑：标记订单已支付 + 升级用户 tier + 创建订阅
+    # 处理业务逻辑：标记订单已支付 + 写入 30 天订阅 + 按订阅重算 tier
     db = current_app._db
     order = db.get_order_by_out_trade_no(result.out_trade_no)
     if not order:
@@ -498,7 +498,8 @@ def wechat_pay_notify():
         resp, code = build_notify_response(True)
         return resp, code, {"Content-Type": "application/json"}
 
-    # 原子操作：标记支付 → 升级 tier → 创建订阅
+    # 标记支付 → 写入 30 天订阅 → 按订阅重算 tier。
+    # 不直接 update_user_tier：后写的一轨会把另一轨仍有效的权益盖掉。
     paid_order = db.mark_order_paid(result.out_trade_no, result.transaction_id)
     if not paid_order:
         resp, code = build_notify_response(True)
@@ -508,17 +509,14 @@ def wechat_pay_notify():
     tier = paid_order["tier"]
     plan_id = paid_order["plan_id"]
 
-    # 升级用户 tier
-    db.update_user_tier(user_id, tier)
-
-    # 创建/更新订阅（1 个月有效期）
     from datetime import datetime, timedelta
     expires = (datetime.now() + timedelta(days=30)).isoformat()
     db.upsert_subscription(user_id, tier, plan_id, expires, auto_renew=False)
+    granted = db.recompute_user_tier(user_id)
 
     current_app.logger.info(
-        f"[wechat_pay] Payment confirmed: user={user_id} tier={tier} "
-        f"txn={result.transaction_id} order={result.out_trade_no}"
+        f"[wechat_pay] Payment confirmed: user={user_id} order_tier={tier} "
+        f"granted_tier={granted} txn={result.transaction_id} order={result.out_trade_no}"
     )
 
     resp, code = build_notify_response(True)
@@ -993,7 +991,8 @@ def stripe_webhook():
         if order["status"] == "paid":
             return jsonify(status="ok"), 200
 
-        # Mark paid + upgrade tier + create subscription
+        # 标记支付 → 写入 30 天订阅 → 按订阅重算 tier。
+        # 不直接 update_user_tier：后写的一轨会把另一轨仍有效的权益盖掉。
         paid_order = db.mark_order_paid(result.out_trade_no, result.customer_id)
         if not paid_order:
             return jsonify(status="ok"), 200
@@ -1002,15 +1001,14 @@ def stripe_webhook():
         tier = paid_order["tier"]
         plan_id = paid_order["plan_id"]
 
-        db.update_user_tier(user_id, tier)
-
         from datetime import datetime, timedelta
         expires = (datetime.now() + timedelta(days=30)).isoformat()
         db.upsert_subscription(user_id, tier, plan_id, expires, auto_renew=False)
+        granted = db.recompute_user_tier(user_id)
 
         current_app.logger.info(
-            f"[stripe] Payment confirmed: user={user_id} tier={tier} "
-            f"order={result.out_trade_no} session={result.customer_id}"
+            f"[stripe] Payment confirmed: user={user_id} order_tier={tier} "
+            f"granted_tier={granted} order={result.out_trade_no} session={result.customer_id}"
         )
 
     elif result.event_type == "invoice.paid":

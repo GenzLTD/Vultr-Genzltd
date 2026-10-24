@@ -190,16 +190,17 @@ def _process_delivery(purchase_data: dict, user_id: str) -> tuple[bool, str]:
         },
     )
 
-    # --- 标记支付 + 升级 tier + 创建订阅 ---
+    # 标记支付 → 写入 30 天订阅 → 按订阅重算 tier。
+    # 不直接 update_user_tier：后写的一轨会把另一轨仍有效的权益盖掉。
     db.mark_order_paid(out_trade_no, purchase_token)
-    db.update_user_tier(user_id, tier)
 
     expires = (datetime.now() + timedelta(days=30)).isoformat()
     db.upsert_subscription(user_id, tier, f"huawei_{product_id}", expires, auto_renew=False)
+    granted = db.recompute_user_tier(user_id)
 
     logger.info(
-        f"[huawei_iap] Delivery complete: user={user_id} tier={tier} "
-        f"product={product_id} order={out_trade_no}"
+        f"[huawei_iap] Delivery complete: user={user_id} order_tier={tier} "
+        f"granted_tier={granted} product={product_id} order={out_trade_no}"
     )
     return True, order_id
 
