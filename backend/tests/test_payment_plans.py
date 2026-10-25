@@ -1,6 +1,8 @@
 """Tests for payment contract and region-aware plans."""
 import pytest
 
+from src.payment.plans import tier_for_product
+
 
 def test_payment_plans_default_cn(client):
     resp = client.get("/v1/payment/plans")
@@ -75,3 +77,25 @@ def test_payment_upgrade_includes_regional_plan(client, tier, expected_price):
     assert data["tier"] == tier
     assert data["plan"]["price_monthly"] == expected_price
     assert data["plan"]["currency"] == "CNY"
+
+
+def test_iap_product_tier_reads_contract():
+    assert tier_for_product("huawei_iap", "premium_monthly") == "supporter"
+    assert tier_for_product("huawei_iap", "pro_monthly") == "pro"
+    assert tier_for_product("apple_iap", "supporter_monthly") == "supporter"
+    assert tier_for_product("apple_iap", "pro_monthly") == "pro"
+    assert tier_for_product("huawei_iap", "mystery_pack") is None
+    assert tier_for_product("apple_iap", "supporter_monthly_us") is None
+
+
+def test_payment_contract_names_gfcc_and_forbids_single_rail_tier_write():
+    import json
+    from src.payment.plans import CONTRACT_PATH
+
+    doc = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
+    assert doc["version"] == "1.3.0"
+    assert doc["protocol"] == "contracts/gfcc"
+    assert "looma-zervi/backend/contracts" not in doc["description"]
+    rule = doc["apple_iap"]["ledger_rule"]
+    assert "各轨只写自己的订阅行" in rule
+    assert "不由单条支付通知" in rule
