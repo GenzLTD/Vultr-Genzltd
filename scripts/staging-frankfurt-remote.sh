@@ -11,6 +11,7 @@ STAGE=/tmp/staging-frankfurt
 cd "$REPO"
 test -d .git
 test -f "$STAGE/docker-compose.frankfurt.yml"
+test -f "$STAGE/docker-compose.fra-stage.yml"
 test -d "$STAGE/contracts-gfcc"
 test -f "$REPO/.staging-gfcc.env"
 
@@ -66,8 +67,12 @@ mem = json.load(open("contracts/gfcc/memory.v1.json", encoding="utf-8"))
 want = os.environ["GFCC_SHA"]
 if pin.get("commit") != want:
     sys.exit(f"REFUSE: SOURCE.json.commit={pin.get('commit')} 不是 {want}")
-if mem.get("version") != "1.3.0" or pin["families"]["l0"]["version"] != "1.3.0":
-    sys.exit("REFUSE: L0 不是 1.3.0")
+env = json.load(open("contracts/gfcc/signal.envelope.v1.json", encoding="utf-8"))
+axis = os.path.isfile("contracts/gfcc/signals/value_axis_choice.v1.json")
+if mem.get("version") != "1.4.0" or pin["families"]["l0"]["version"] != "1.4.0":
+    sys.exit("REFUSE: L0 不是 1.4.0")
+if env.get("version") != "1.1.0" or pin["families"]["signal"]["version"] != "1.1.0" or not axis:
+    sys.exit("REFUSE: 信号不是 1.1.0，或缺 value_axis_choice")
 store = mem.get("store_slot") or {}
 if "gfcc" not in (store.get("optional_adapters") or []) or store.get("link") != "actor_sub":
     sys.exit("REFUSE: memory.v1.json 没有 gfcc 适配器或 actor_sub 关联")
@@ -161,7 +166,7 @@ tport="$(docker port tatha-mbti 8010/tcp | head -n 1)"
 pport="$(docker port gfcc-pgvector 5432/tcp | head -n 1)"
 [ "$pport" = "127.0.0.1:5434" ] || { echo "REFUSE: gfcc-pgvector 端口 $pport" >&2; exit 1; }
 
-printf 'vultr=%s\ngfcc=%s\nl0=1.3.0\nschema=memory.v1\n' "$VULTR_SHA" "$GFCC_SHA" > "$REPO/.staging-delivery"
+printf 'vultr=%s\ngfcc=%s\nl0=1.4.0\nsignal=1.1.0\nschema=memory.v1\n' "$VULTR_SHA" "$GFCC_SHA" > "$REPO/.staging-delivery"
 
 # 端到端冒烟：/v1/ask + context.port_hint=memory，带原始 X-Actor-Sub。
 # 只读、不写库；空结果按契约也算成功。free 档 ask 配额是 1 次/进程·天，
@@ -245,5 +250,113 @@ grep -qi "circle" /tmp/circle-smoke.html || { echo "REFUSE: /circle/ 响应不�
 rm -f /tmp/circle-smoke.html
 kver="$(grep -m1 '^version' "$KERNEL_SRC/services/gfcc_kernel/pyproject.toml" | sed 's/.*"\(.*\)".*/\1/')"
 
-printf 'vultr=%s\ngfcc=%s\nl0=1.3.0\nschema=memory.v1\nkernel=%s@%s\n' \
+printf 'vultr=%s\ngfcc=%s\nl0=1.4.0\nsignal=1.1.0\nschema=memory.v1\nkernel=%s@%s\n' \
   "$VULTR_SHA" "$GFCC_SHA" "$kver" "$(printf %s "$GFCC_SHA" | cut -c1-7)" > "$REPO/.staging-delivery"
+
+# 职业域演练库：独立 Postgres，不复用 gfcc-pgvector，不把正在跑的 looma 指过来。
+# 不装 10 月 20 日那份诗库，也不在这台 2 核机器上生成嵌入。
+looma_counts() {
+  docker exec -i looma-backend python - <<'PY'
+import os, sqlite3
+p = os.environ["DATABASE_PATH"]
+c = sqlite3.connect("file:%s?mode=ro" % p, uri=True)
+print(p)
+print("users", c.execute("select count(*) from users").fetchone()[0])
+has = c.execute("select 1 from sqlite_master where type='table' and name='poems'").fetchone()
+print("poems", c.execute("select count(*) from poems").fetchone()[0] if has else "absent")
+PY
+}
+before_counts="$(looma_counts)"
+STAGE_DIR=/opt/looma-fra-stage
+mkdir -p "$STAGE_DIR"
+cp "$STAGE/docker-compose.fra-stage.yml" "$STAGE_DIR/docker-compose.yml"
+if [ ! -s "$STAGE_DIR/.env" ]; then
+  python3 -c 'import secrets; print("POSTGRES_PASSWORD="+secrets.token_hex(24))' > "$STAGE_DIR/.env"
+  printf '\nSTAGE_PG_PORT=5433\n' >> "$STAGE_DIR/.env"
+  chmod 600 "$STAGE_DIR/.env"
+fi
+docker compose --env-file "$STAGE_DIR/.env" -f "$STAGE_DIR/docker-compose.yml" -p looma-fra-stage up -d
+ready=""
+i=1
+while [ "$i" -le 20 ]; do
+  ready="$(docker exec looma-pgvector-stage psql -U looma -d genzltd_stage -tAc 'SELECT current_database()' 2>/dev/null || true)"
+  [ "$ready" = "genzltd_stage" ] && break
+  sleep 2
+  i=$((i + 1))
+done
+[ "$ready" = "genzltd_stage" ] || { echo "REFUSE: genzltd_stage 40 秒内不可用" >&2; exit 1; }
+public_tables="$(docker exec looma-pgvector-stage psql -U looma -d genzltd_stage -tAc "select count(*) from information_schema.tables where table_schema='public'")"
+[ "$public_tables" = "0" ] || { echo "REFUSE: genzltd_stage 不是空库（public 表 $public_tables）" >&2; exit 1; }
+sport="$(docker port looma-pgvector-stage 5432/tcp | head -n 1)"
+[ "$sport" = "127.0.0.1:5433" ] || { echo "REFUSE: 演练库端口 $sport" >&2; exit 1; }
+[ "$(docker inspect -f '{{.Id}}' gfcc-pgvector)" != "$(docker inspect -f '{{.Id}}' looma-pgvector-stage)" ] || { echo "REFUSE: 演练库复用了 gfcc-pgvector" >&2; exit 1; }
+
+b3="$(snap looma-backend)"
+[ "$b1" = "$b3" ] || { echo "REFUSE: 演练库起来之后 looma-backend 容器变了" >&2; exit 1; }
+after_counts="$(looma_counts)"
+[ "$before_counts" = "$after_counts" ] || { echo "REFUSE: 正在跑的 looma SQLite 计数变了" >&2; printf 'before=%s\nafter=%s\n' "$before_counts" "$after_counts" >&2; exit 1; }
+case "$after_counts" in
+  *"/app/data/looma.db"*) ;;
+  *) echo "REFUSE: looma 不再使用原来的 SQLite" >&2; exit 1 ;;
+esac
+case "$after_counts" in
+  *"poems 0"*) ;;
+  *) echo "REFUSE: looma 诗库不再是 0" >&2; exit 1 ;;
+esac
+echo "OK 演练库 genzltd_stage 在 127.0.0.1:5433，空库；looma 仍是原来的 SQLite"
+
+python3 - <<'PY' > /tmp/axis-smoke-body.json
+import hashlib, json
+body = {
+    "signal_type": "value_axis_choice",
+    "user_id_hash": hashlib.sha256(b"fra-rehearsal@local.test").hexdigest(),
+    "nonce": "fra-rehearsal-axis-1",
+    "payload": {
+        "axis": "freedom",
+        "imprint_name": "尊严",
+        "domain": "职业域",
+        "points": 3,
+        "source": "planetx",
+    },
+}
+print(json.dumps(body, ensure_ascii=False))
+PY
+code="$(curl -s -o /tmp/axis-smoke.json -w '%{http_code}' --max-time 10 \
+  -H 'Content-Type: application/json' \
+  --data-binary @/tmp/axis-smoke-body.json \
+  http://127.0.0.1:5211/v1/signal-ingest || true)"
+case "$code" in
+  200) ;;
+  *) echo "REFUSE: value_axis_choice HTTP $code $(head -c 300 /tmp/axis-smoke.json 2>/dev/null)" >&2; exit 1 ;;
+esac
+python3 - <<'PY'
+import json, sys
+d = json.load(open("/tmp/axis-smoke.json", encoding="utf-8"))
+if d.get("status") not in ("stored", "duplicate") or d.get("port") != "identity":
+    sys.exit("REFUSE: value_axis_choice 没有进 identity：%s" % d)
+print("OK value_axis_choice", d.get("status"), d.get("port"))
+PY
+python3 - <<'PY' > /tmp/axis-bad-body.json
+import hashlib, json
+body = {
+    "signal_type": "value_axis_choice",
+    "user_id_hash": hashlib.sha256(b"fra-rehearsal@local.test").hexdigest(),
+    "nonce": "fra-rehearsal-axis-bad",
+    "payload": {
+        "axis": "freedom",
+        "imprint_name": "尊严",
+        "domain": "职业域",
+        "points": 3,
+        "source": "planetx",
+        "salary_match": 5,
+    },
+}
+print(json.dumps(body, ensure_ascii=False))
+PY
+bad="$(curl -s -o /tmp/axis-bad.json -w '%{http_code}' --max-time 10 \
+  -H 'Content-Type: application/json' \
+  --data-binary @/tmp/axis-bad-body.json \
+  http://127.0.0.1:5211/v1/signal-ingest || true)"
+[ "$bad" = "422" ] || { echo "REFUSE: 带 salary_match 的信号应是 422，实际 $bad" >&2; exit 1; }
+rm -f /tmp/axis-smoke.json /tmp/axis-bad.json /tmp/axis-smoke-body.json /tmp/axis-bad-body.json
+echo "OK 信号拒绝职位分字段"

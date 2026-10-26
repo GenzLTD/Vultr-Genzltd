@@ -7,7 +7,10 @@
 #   这次联调在预发机上要落地的：
 #     1. /opt/src/Vultr-Genzltd 检出切到本工作流的提交
 #     2. contracts/gfcc 换成 gfcc_ref 那一提交的字节，SOURCE.json 钉着该提交
-#        （L0 必须是 1.3.0）。这是消费者钉，不在服务器上改协议字段。
+#        （L0 必须是 1.4.0，信号 1.1.0，含 value_axis_choice）。
+#        这是消费者钉，不在服务器上改协议字段。
+#     5. 另起空库 genzltd_stage，只绑 127.0.0.1:5433。
+#        不复用 gfcc-pgvector，不把 looma-backend 指到 Postgres，不装诗库。
 #     3. 按该检出重建并只重启 tatha（127.0.0.1:5210）
 #     4. 空的 pgvector，库名 gfcc，只绑 127.0.0.1:5434
 #
@@ -40,7 +43,7 @@ on:
       gfcc_ref:
         description: 'GenzLTD/gfcc 的完整提交。契约字节只从这一提交拷贝。'
         required: true
-        default: '3dcb0846ae471ab37367596d61ec8aeadad34ba6'
+        default: '0fcd1396d73e5763d942c1421c704de743ef5d10'
         type: string
 
 permissions:
@@ -52,7 +55,7 @@ concurrency:
 
 jobs:
   pin:
-    name: 钉 GFCC 1.3.0
+    name: 钉 GFCC 1.4.0
     runs-on: ubuntu-latest
     outputs:
       gfcc_sha: ${{ steps.vendor.outputs.gfcc_sha }}
@@ -139,12 +142,15 @@ jobs:
           cp -a contracts/gfcc staging-bundle/contracts-gfcc
           cp compose/docker-compose.frankfurt.yml staging-bundle/docker-compose.frankfurt.yml
           cp scripts/staging-frankfurt-remote.sh staging-bundle/staging-frankfurt-remote.sh
+          cp compose/docker-compose.fra-stage.yml staging-bundle/docker-compose.fra-stage.yml
           # memory.recall 的存储结构。预发库是已 initdb 的卷，initdb.d 不会再跑，
           # 所以这份 SQL 由远端脚本每次显式执行（幂等）。
           cp compose/sql/gfcc-memory-v1.sql staging-bundle/gfcc-memory-v1.sql
           test -f staging-bundle/contracts-gfcc/memory.v1.json
           test -f staging-bundle/contracts-gfcc/SOURCE.json
           test -f staging-bundle/gfcc-memory-v1.sql
+          test -f staging-bundle/docker-compose.fra-stage.yml
+          test -f staging-bundle/contracts-gfcc/signals/value_axis_choice.v1.json
 
       - uses: actions/upload-artifact@v4
         with:
@@ -155,7 +161,8 @@ jobs:
 
       - name: 这次预发做到哪、还缺什么
         run: |
-          echo "契约钉来自 gfcc ${{ steps.vendor.outputs.gfcc_sha }}，L0 1.3.0。不打 stack-v*。"
+          echo "契约钉来自 gfcc ${{ steps.vendor.outputs.gfcc_sha }}，L0 1.4.0，信号 1.1.0。不打 stack-v*。"
+          echo "另起空库 genzltd_stage@127.0.0.1:5433。不复用 gfcc-pgvector，不改 looma SQLite，不装诗库。"
           echo "zervi-rust 不部署。Win 或 Mac 仿真网关，经 nginx 或隧道访问 127.0.0.1:5210。"
           echo "Tatha 侧已接 memory.recall：/v1/ask + context.port_hint=memory，只读 X-Actor-Sub（原始 claims.sub）。"
           echo "memory 存储结构由本次流水线显式迁移（compose/sql/gfcc-memory-v1.sql），不依赖 initdb.d。"

@@ -1,7 +1,7 @@
 #!/bin/sh
 # 把 GenzLTD/gfcc 某一提交的契约字节拷进本仓 contracts/gfcc，并改 SOURCE.json 的钉。
 # 只改 commit、pinned_at、家族 version。不改协议字段。
-# L0 必须是 1.3.0，否则拒绝。
+# L0 必须是 1.4.0，信号必须是 1.1.0，否则拒绝。
 set -eu
 
 GFCC_SRC="${1:?用法: vendor-gfcc-pin.sh <gfcc 检出> <contracts/gfcc 目录>}"
@@ -40,8 +40,13 @@ if len(sha) < 40:
 
 memory = json.loads((src / "memory.v1.json").read_text(encoding="utf-8"))
 signal = json.loads((src / "signal.envelope.v1.json").read_text(encoding="utf-8"))
-if memory.get("version") != "1.3.0":
-    raise SystemExit(f"FAIL: memory.v1.json version={memory.get('version')}，本预发只收 1.3.0")
+axis = src / "signals" / "value_axis_choice.v1.json"
+if memory.get("version") != "1.4.0":
+    raise SystemExit(f"FAIL: memory.v1.json version={memory.get('version')}，本预发只收 1.4.0")
+if signal.get("version") != "1.1.0":
+    raise SystemExit(f"FAIL: signal.envelope version={signal.get('version')}，本预发只收 1.1.0")
+if not axis.is_file():
+    raise SystemExit("FAIL: 真源缺少 signals/value_axis_choice.v1.json")
 
 pin_path = dest / "SOURCE.json"
 pin = json.loads(pin_path.read_text(encoding="utf-8"))

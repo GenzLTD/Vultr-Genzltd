@@ -1,0 +1,35 @@
+# 法兰克福职业域演练用的独立 Postgres。
+# 只增加 genzltd_stage，不改 looma-backend 的 SQLite，不使用 gfcc-pgvector 的 5434 和数据卷。
+# 密码由环境变量 POSTGRES_PASSWORD 提供，不写入本文件。不装诗库。
+
+name: looma-fra-stage
+
+services:
+  pgvector:
+    image: pgvector/pgvector:pg16
+    container_name: looma-pgvector-stage
+    restart: unless-stopped
+    stop_grace_period: 60s
+    ports:
+      - "127.0.0.1:${STAGE_PG_PORT:-5433}:5432"
+    environment:
+      POSTGRES_USER: looma
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: genzltd_stage
+    volumes:
+      - genzltd-stage-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U looma -d genzltd_stage"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - looma-stage
+
+volumes:
+  genzltd-stage-data:
+
+networks:
+  looma-stage:
+    driver: bridge
