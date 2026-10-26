@@ -4,11 +4,11 @@
   "unique_protocol_source": true,
   "note": "本仓认的唯一协议真源。GenzLTD/gfcc 是写作汇合处；本钉让 stack-v* 能指到当时生效的 Ask/五端口/信号。不是 looma-zervi、不是现网 /opt、不是 backend/contracts。刷新 = 改 JSON + 改本文件 + 新 tag。实现分叉（支付、身份、Host）不要求改契约。",
   "repo": "https://github.com/GenzLTD/gfcc",
-  "commit": "0fcd1396d73e5763d942c1421c704de743ef5d10",
+  "commit": "4f0dc4ba5c15861fbe56e0ad63e762003b80bf62",
   "pinned_at": "2026-10-26",
   "families": {
     "l0": {
-      "version": "1.4.0",
+      "version": "1.5.0",
       "files": [
         "ask.envelope.v1.json",
         "circle.v1.json",
@@ -17,7 +17,8 @@
         "consensus.v1.json",
         "contribution.v1.json",
         "roles.v1.json",
-        "registry.v1.json"
+        "registry.v1.json",
+        "job_match.v1.json"
       ]
     },
     "signal": {

@@ -69,10 +69,13 @@ if pin.get("commit") != want:
     sys.exit(f"REFUSE: SOURCE.json.commit={pin.get('commit')} 不是 {want}")
 env = json.load(open("contracts/gfcc/signal.envelope.v1.json", encoding="utf-8"))
 axis = os.path.isfile("contracts/gfcc/signals/value_axis_choice.v1.json")
-if mem.get("version") != "1.4.0" or pin["families"]["l0"]["version"] != "1.4.0":
-    sys.exit("REFUSE: L0 不是 1.4.0")
+score = json.load(open("contracts/gfcc/job_match.v1.json", encoding="utf-8"))
+if mem.get("version") != "1.5.0" or pin["families"]["l0"]["version"] != "1.5.0":
+    sys.exit("REFUSE: L0 不是 1.5.0")
 if env.get("version") != "1.1.0" or pin["families"]["signal"]["version"] != "1.1.0" or not axis:
     sys.exit("REFUSE: 信号不是 1.1.0，或缺 value_axis_choice")
+if score.get("version") != "1.5.0" or score.get("writes_to") != "none":
+    sys.exit("REFUSE: job_match.v1.json 不是 1.5.0，或 writes_to 不是 none")
 store = mem.get("store_slot") or {}
 if "gfcc" not in (store.get("optional_adapters") or []) or store.get("link") != "actor_sub":
     sys.exit("REFUSE: memory.v1.json 没有 gfcc 适配器或 actor_sub 关联")
@@ -166,7 +169,7 @@ tport="$(docker port tatha-mbti 8010/tcp | head -n 1)"
 pport="$(docker port gfcc-pgvector 5432/tcp | head -n 1)"
 [ "$pport" = "127.0.0.1:5434" ] || { echo "REFUSE: gfcc-pgvector 端口 $pport" >&2; exit 1; }
 
-printf 'vultr=%s\ngfcc=%s\nl0=1.4.0\nsignal=1.1.0\nschema=memory.v1\n' "$VULTR_SHA" "$GFCC_SHA" > "$REPO/.staging-delivery"
+printf 'vultr=%s\ngfcc=%s\nl0=1.5.0\nsignal=1.1.0\nschema=memory.v1\n' "$VULTR_SHA" "$GFCC_SHA" > "$REPO/.staging-delivery"
 
 # 端到端冒烟：/v1/ask + context.port_hint=memory，带原始 X-Actor-Sub。
 # 只读、不写库；空结果按契约也算成功。free 档 ask 配额是 1 次/进程·天，
@@ -219,7 +222,12 @@ kimg="gfcc-kernel:stage-$GFCC_SHA"
 docker build -f "$REPO/docker/Dockerfile.gfcc-kernel" -t "$kimg" "$KERNEL_SRC" \
   || { echo "REFUSE: kernel 镜像构建失败" >&2; exit 1; }
 
-$COMPOSE up -d --no-deps gfcc-kernel
+KERNEL_UP="$COMPOSE"
+if [ -f /opt/looma-fra-emit/kernel-secret.yml ] && [ -s /opt/looma-fra-emit/ingest.env ]; then
+  KERNEL_UP="$COMPOSE --env-file /opt/looma-fra-emit/ingest.env -f /opt/looma-fra-emit/kernel-secret.yml"
+  echo "OK 内核沿用本机已有摄入密钥，不写入仓库"
+fi
+$KERNEL_UP up -d --no-deps gfcc-kernel
 
 khealthy=0
 i=1
@@ -250,7 +258,7 @@ grep -qi "circle" /tmp/circle-smoke.html || { echo "REFUSE: /circle/ 响应不�
 rm -f /tmp/circle-smoke.html
 kver="$(grep -m1 '^version' "$KERNEL_SRC/services/gfcc_kernel/pyproject.toml" | sed 's/.*"\(.*\)".*/\1/')"
 
-printf 'vultr=%s\ngfcc=%s\nl0=1.4.0\nsignal=1.1.0\nschema=memory.v1\nkernel=%s@%s\n' \
+printf 'vultr=%s\ngfcc=%s\nl0=1.5.0\nsignal=1.1.0\nschema=memory.v1\nkernel=%s@%s\n' \
   "$VULTR_SHA" "$GFCC_SHA" "$kver" "$(printf %s "$GFCC_SHA" | cut -c1-7)" > "$REPO/.staging-delivery"
 
 # 职业域演练库：独立 Postgres，不复用 gfcc-pgvector，不把正在跑的 looma 指过来。
@@ -321,10 +329,41 @@ body = {
 }
 print(json.dumps(body, ensure_ascii=False))
 PY
-code="$(curl -s -o /tmp/axis-smoke.json -w '%{http_code}' --max-time 10 \
-  -H 'Content-Type: application/json' \
-  --data-binary @/tmp/axis-smoke-body.json \
-  http://127.0.0.1:5211/v1/signal-ingest || true)"
+python3 - <<'PY'
+import hashlib, hmac
+from pathlib import Path
+secret = ""
+envf = Path("/opt/looma-fra-emit/ingest.env")
+if envf.is_file():
+    for line in envf.read_text(encoding="utf-8").splitlines():
+        if line.startswith("SIGNAL_INGEST_SECRET="):
+            secret = line.split("=", 1)[1].strip()
+Path("/tmp/axis-sign-mode").write_text("signed" if secret else "unsigned", encoding="utf-8")
+if secret:
+    body = Path("/tmp/axis-smoke-body.json").read_bytes()
+    Path("/tmp/axis-smoke.sig").write_text(
+        hmac.new(secret.encode(), body, hashlib.sha256).hexdigest(), encoding="utf-8"
+    )
+PY
+sign_mode="$(cat /tmp/axis-sign-mode)"
+if [ "$sign_mode" = "signed" ]; then
+  plain="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+    -H 'Content-Type: application/json' \
+    --data-binary @/tmp/axis-smoke-body.json \
+    http://127.0.0.1:5211/v1/signal-ingest || true)"
+  [ "$plain" = "401" ] || { echo "REFUSE: 未签名摄入应是 401，实际 $plain" >&2; exit 1; }
+  echo "OK 未签名摄入 401"
+  code="$(curl -s -o /tmp/axis-smoke.json -w '%{http_code}' --max-time 10 \
+    -H 'Content-Type: application/json' \
+    -H "X-Signature: $(cat /tmp/axis-smoke.sig)" \
+    --data-binary @/tmp/axis-smoke-body.json \
+    http://127.0.0.1:5211/v1/signal-ingest || true)"
+else
+  code="$(curl -s -o /tmp/axis-smoke.json -w '%{http_code}' --max-time 10 \
+    -H 'Content-Type: application/json' \
+    --data-binary @/tmp/axis-smoke-body.json \
+    http://127.0.0.1:5211/v1/signal-ingest || true)"
+fi
 case "$code" in
   200) ;;
   *) echo "REFUSE: value_axis_choice HTTP $code $(head -c 300 /tmp/axis-smoke.json 2>/dev/null)" >&2; exit 1 ;;
@@ -353,10 +392,36 @@ body = {
 }
 print(json.dumps(body, ensure_ascii=False))
 PY
-bad="$(curl -s -o /tmp/axis-bad.json -w '%{http_code}' --max-time 10 \
-  -H 'Content-Type: application/json' \
-  --data-binary @/tmp/axis-bad-body.json \
-  http://127.0.0.1:5211/v1/signal-ingest || true)"
+if [ "$sign_mode" = "signed" ]; then
+  python3 - <<'PY'
+import hashlib, hmac
+from pathlib import Path
+secret = ""
+for line in Path("/opt/looma-fra-emit/ingest.env").read_text(encoding="utf-8").splitlines():
+    if line.startswith("SIGNAL_INGEST_SECRET="):
+        secret = line.split("=", 1)[1].strip()
+body = Path("/tmp/axis-bad-body.json").read_bytes()
+Path("/tmp/axis-bad.sig").write_text(
+    hmac.new(secret.encode(), body, hashlib.sha256).hexdigest(), encoding="utf-8"
+)
+PY
+  bad="$(curl -s -o /tmp/axis-bad.json -w '%{http_code}' --max-time 10 \
+    -H 'Content-Type: application/json' \
+    -H "X-Signature: $(cat /tmp/axis-bad.sig)" \
+    --data-binary @/tmp/axis-bad-body.json \
+    http://127.0.0.1:5211/v1/signal-ingest || true)"
+else
+  bad="$(curl -s -o /tmp/axis-bad.json -w '%{http_code}' --max-time 10 \
+    -H 'Content-Type: application/json' \
+    --data-binary @/tmp/axis-bad-body.json \
+    http://127.0.0.1:5211/v1/signal-ingest || true)"
+fi
 [ "$bad" = "422" ] || { echo "REFUSE: 带 salary_match 的信号应是 422，实际 $bad" >&2; exit 1; }
-rm -f /tmp/axis-smoke.json /tmp/axis-bad.json /tmp/axis-smoke-body.json /tmp/axis-bad-body.json
-echo "OK 信号拒绝职位分字段"
+va="$(curl -s -o /tmp/axis-va.json -w '%{http_code}' --max-time 10 \
+  -X POST -H 'Content-Type: application/json' \
+  --data '{}' \
+  http://127.0.0.1:5211/v1/identity/value-axes || true)"
+[ "$va" = "503" ] || { echo "REFUSE: 未配 ETHOS 时价值轴口应是 503，实际 $va" >&2; exit 1; }
+rm -f /tmp/axis-smoke.json /tmp/axis-bad.json /tmp/axis-smoke-body.json /tmp/axis-bad-body.json \
+  /tmp/axis-smoke.sig /tmp/axis-bad.sig /tmp/axis-sign-mode /tmp/axis-va.json
+echo "OK 信号拒绝职位分字段；价值轴口未配登录密钥时 503"

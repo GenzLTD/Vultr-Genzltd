@@ -6,10 +6,10 @@
 
 | 族 | 当前钉 | 入口 |
 |---|---|---|
-| Ask + 五端口 + roles + registry | **1.4.0** | `POST /v1/ask` |
+| Ask + 五端口 + roles + registry + job_match | **1.5.0** | `POST /v1/ask` |
 | 信号信封 + `signals/*` | **1.1.0** | `POST /v1/signal-ingest` |
 
-钉点见 [`gfcc/SOURCE.json`](gfcc/SOURCE.json)（commit `0fcd1396…`，2026-10-26）。
+钉点见 [`gfcc/SOURCE.json`](gfcc/SOURCE.json)（commit `4f0dc4ba…`，2026-10-26）。分支名里的 1.4.0 是旧名，契约终态是 L0 1.5.0。
 
 ## 本仓认什么 / 不认什么
 

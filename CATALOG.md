@@ -55,7 +55,7 @@
 - `/opt/looma-zervi/.git` 存在，但是**零 commit 的空仓**：`branch main` 却 `git log` 报
   *"does not have any commits yet"*，所有文件 `??` untracked（`.git` 由 root 于 09-18 04:28 创建）。
   → **git 无法用于版本对账或回滚**。这正是本仓要打 `stack-v*`、把树落到 `/opt/vultr-genzltd-stack/releases/<tag>/` 的原因。
-- GFCC 契约钉（仓内，随 tag 上机）：Ask/五端口 **1.4.0**、信号 **1.1.0**，来源 `GenzLTD/gfcc@0fcd1396`。没有这份钉，回滚只能还原文件，不知道协议是哪一版。
+- GFCC 契约钉（仓内，随 tag 上机）：Ask/五端口与 job_match **1.5.0**、信号 **1.1.0**，来源 `GenzLTD/gfcc@4f0dc4ba`。内核软件仍是 1.1.0。没有这份钉，回滚只能还原文件，不知道协议是哪一版。
 - C2 落地后镜像 digest 与 `stack-v*` 并列，取代 `git_commit.txt`。
 
 ### 2.4 其他实测
