@@ -329,7 +329,12 @@ class MembershipService:
         return ({"status": "ok", "expires_at": (sub or {}).get("expires_at")}, 200)
 
     def _handle_cancellation(self, db: Any, result: Any) -> tuple[dict[str, Any], int]:
-        """subscription.cancelled：订阅结束，标记过期并降级 free。"""
+        """subscription.cancelled：订阅结束，标记过期并**重算** tier。
+
+        ⚠️ 不是「无条件降 free」。用户在另一条变现轨（Apple IAP / App 内购买）上
+        可能仍有有效订阅，直接降 free 会把已付费权益抹掉。
+        是否降级由 `db.recompute_user_tier()` 裁决：没有任何未过期订阅才降 free。
+        """
         user_id = self._resolve_user_id(db, result)
         if not user_id:
             logger.warning(
@@ -338,6 +343,10 @@ class MembershipService:
             )
             return ({"status": "ok", "resolved": False}, 200)
 
-        db.expire_subscription(user_id)
-        logger.info("[membership] subscription cancelled: user=%s", user_id)
-        return ({"status": "ok"}, 200)
+        db.expire_subscription(user_id)          # 内部已改为重算，不再直写 free
+        tier = db.recompute_user_tier(user_id)   # 双保险：跨轨取 max 后再定档
+        logger.info(
+            "[membership] subscription cancelled: user=%s tier_after_recompute=%s",
+            user_id, tier,
+        )
+        return ({"status": "ok", "tier": tier}, 200)
