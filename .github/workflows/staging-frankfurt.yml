@@ -141,29 +141,12 @@ jobs:
         run: |
           set -euo pipefail
           if [ -f /tmp/gfcc-use-vendored ]; then
-            python3 - <<'PY'
-            import json, os, sys
-            pin = json.load(open("contracts/gfcc/SOURCE.json", encoding="utf-8"))
-            ref = os.environ["GFCC_REF"]
-            if pin.get("commit") != ref:
-                sys.exit(f"FAIL: 仓内钉 {pin.get('commit')} 不是 {ref}")
-            with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-                out.write(f"gfcc_sha={pin['commit']}\n")
-                out.write(f"l0_version={pin['families']['l0']['version']}\n")
-                out.write(f"signal_version={pin['families']['signal']['version']}\n")
-            print(f"OK vendored pin commit={pin['commit']} l0={pin['families']['l0']['version']} signal={pin['families']['signal']['version']}")
-            PY
+            python3 -c 'import json,os,sys; pin=json.load(open("contracts/gfcc/SOURCE.json",encoding="utf-8")); ref=os.environ["GFCC_REF"]; sys.exit("FAIL: 仓内钉 %s 不是 %s"%(pin.get("commit"), ref)) if pin.get("commit")!=ref else None; out=open(os.environ["GITHUB_OUTPUT"],"a",encoding="utf-8"); out.write("gfcc_sha=%s\nl0_version=%s\nsignal_version=%s\n"%(pin["commit"], pin["families"]["l0"]["version"], pin["families"]["signal"]["version"])); print("OK vendored pin", pin["commit"], pin["families"]["l0"]["version"], pin["families"]["signal"]["version"])'
             exit 0
           fi
           bash scripts/vendor-gfcc-pin.sh gfcc-src contracts/gfcc
           echo "gfcc_sha=$(git -C gfcc-src rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          python3 - <<'PY'
-          import json, os
-          pin = json.load(open("contracts/gfcc/SOURCE.json", encoding="utf-8"))
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-              out.write(f"l0_version={pin['families']['l0']['version']}\n")
-              out.write(f"signal_version={pin['families']['signal']['version']}\n")
-          PY
+          python3 -c 'import json,os; pin=json.load(open("contracts/gfcc/SOURCE.json",encoding="utf-8")); out=open(os.environ["GITHUB_OUTPUT"],"a",encoding="utf-8"); out.write("l0_version=%s\nsignal_version=%s\n"%(pin["families"]["l0"]["version"], pin["families"]["signal"]["version"]))'
 
       - name: 契约层门禁
         run: bash scripts/assert-contracts.sh
