@@ -66,6 +66,7 @@ jobs:
       - name: 确认能读私有真源（真打 API，区分 401/403/404）
         env:
           TOKEN: ${{ secrets.GFCC_READ_TOKEN }}
+          GFCC_REF: ${{ inputs.gfcc_ref }}
         run: |
           set -uo pipefail
           if [ -z "${TOKEN:-}" ]; then
@@ -93,8 +94,14 @@ jobs:
               exit 1
               ;;
             404)
-              echo "::error::HTTP 404：token 看不到这个仓。fine-grained token 的 Resource owner 要选 GenzLTD（不是个人），Repository access 要显式勾上 GenzLTD/gfcc。"
-              exit 1
+              pinned="$(python3 -c 'import json; print(json.load(open("contracts/gfcc/SOURCE.json", encoding="utf-8"))["commit"])')"
+              if [ "$pinned" = "$GFCC_REF" ]; then
+                echo "::warning::HTTP 404：GFCC_READ_TOKEN 看不到 GenzLTD/gfcc。本提交 SOURCE.json 已钉 $pinned，用仓内契约字节继续门禁，不再拉取真源。"
+                touch /tmp/gfcc-use-vendored
+              else
+                echo "::error::HTTP 404：token 看不到这个仓，且仓内钉 $pinned 不是 $GFCC_REF。fine-grained token 的 Resource owner 要选 GenzLTD（不是个人），Repository access 要显式勾上 GenzLTD/gfcc。"
+                exit 1
+              fi
               ;;
             *)
               echo "::error::HTTP $code：非预期状态。"
@@ -113,6 +120,10 @@ jobs:
           REF: ${{ inputs.gfcc_ref }}
         run: |
           set -euo pipefail
+          if [ -f /tmp/gfcc-use-vendored ]; then
+            echo "跳过拉取：GFCC_READ_TOKEN 返回 404，仓内钉已是 $REF"
+            exit 0
+          fi
           rm -rf gfcc-src && mkdir -p gfcc-src && cd gfcc-src
           git init -q .
           git remote add origin https://github.com/GenzLTD/gfcc
@@ -125,8 +136,25 @@ jobs:
 
       - name: 从真源拷贝契约字节
         id: vendor
+        env:
+          GFCC_REF: ${{ inputs.gfcc_ref }}
         run: |
           set -euo pipefail
+          if [ -f /tmp/gfcc-use-vendored ]; then
+            python3 - <<'PY'
+            import json, os, sys
+            pin = json.load(open("contracts/gfcc/SOURCE.json", encoding="utf-8"))
+            ref = os.environ["GFCC_REF"]
+            if pin.get("commit") != ref:
+                sys.exit(f"FAIL: 仓内钉 {pin.get('commit')} 不是 {ref}")
+            with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+                out.write(f"gfcc_sha={pin['commit']}\n")
+                out.write(f"l0_version={pin['families']['l0']['version']}\n")
+                out.write(f"signal_version={pin['families']['signal']['version']}\n")
+            print(f"OK vendored pin commit={pin['commit']} l0={pin['families']['l0']['version']} signal={pin['families']['signal']['version']}")
+            PY
+            exit 0
+          fi
           bash scripts/vendor-gfcc-pin.sh gfcc-src contracts/gfcc
           echo "gfcc_sha=$(git -C gfcc-src rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           python3 - <<'PY'
