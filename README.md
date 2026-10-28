@@ -222,7 +222,7 @@ bash scripts/release-tag.sh 0.1.0           # 允许打本地 tag；--push 被�
 | 项 | 状态 |
 |---|---|
 | 本仓自包含（backend / compose / nginx / docker） | 是。clone 即可干跑 |
-| GFCC 契约钉 | Ask/五端口 **1.3.0**、信号 **1.0.0**，来源 gfcc `3dcb0846` |
+| GFCC 契约钉 | Ask/五端口/job_match **1.5.0**、信号 **1.1.0**，来源 gfcc `4f0dc4ba` |
 | nginx 期望态 | api + tspace + circle（include 已解开）；裸域已摘 |
 | compose 期望态 | 端口收内网（相对 `baseline/` 的 P0） |
 | `stack-v*` 发版 / 真机 `releases/` | 双门禁 YAML 已就位（含 tspace 构建）；**禁止打 tag 部署**；`DEPLOY_ENABLED` 关 |

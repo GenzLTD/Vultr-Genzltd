@@ -2,8 +2,8 @@
 """校验 contracts/gfcc：可解析、同家族 version 一致、仓内 $ref 可解析。
 
 两族互不影响：
-  l0     — 除 signal.* 外，当前线见 SOURCE.json（钉 1.3.0）
-  signal — signal.envelope.v1.json + signals/*.json（钉 1.0.0）
+  l0     — 除 signal.* 外，版本以 SOURCE.json 为准（本预发钉 1.5.0）
+  signal — signal.envelope.v1.json + signals/*.json（本预发钉 1.1.0）
 
 只认同仓内文件引用，不拉 http(s) $schema。
 """

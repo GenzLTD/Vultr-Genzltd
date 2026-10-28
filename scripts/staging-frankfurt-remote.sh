@@ -59,20 +59,28 @@ mkdir -p contracts/gfcc
 cp -a "$STAGE/contracts-gfcc/." contracts/gfcc/
 cp "$STAGE/docker-compose.frankfurt.yml" compose/docker-compose.frankfurt.yml
 
-python3 - <<PY
+l0_ver="$(python3 - <<PY
 import json, os, sys
 pin = json.load(open("contracts/gfcc/SOURCE.json", encoding="utf-8"))
 mem = json.load(open("contracts/gfcc/memory.v1.json", encoding="utf-8"))
+sig = json.load(open("contracts/gfcc/signal.envelope.v1.json", encoding="utf-8"))
 want = os.environ["GFCC_SHA"]
 if pin.get("commit") != want:
     sys.exit(f"REFUSE: SOURCE.json.commit={pin.get('commit')} 不是 {want}")
-if mem.get("version") != "1.3.0" or pin["families"]["l0"]["version"] != "1.3.0":
-    sys.exit("REFUSE: L0 不是 1.3.0")
+pair = (mem.get("version"), sig.get("version"))
+pin_pair = (pin["families"]["l0"]["version"], pin["families"]["signal"]["version"])
+if pair != ("1.5.0", "1.1.0") or pin_pair != pair:
+    sys.exit(
+        "REFUSE: 本预发只收 L0 1.5.0+信号 1.1.0，"
+        f"收到 {pair}，钉 {pin_pair}"
+    )
 store = mem.get("store_slot") or {}
 if "gfcc" not in (store.get("optional_adapters") or []) or store.get("link") != "actor_sub":
     sys.exit("REFUSE: memory.v1.json 没有 gfcc 适配器或 actor_sub 关联")
-print("OK checkout pin", want[:12], "l0", pin["families"]["l0"]["version"])
+print(pair[0])
 PY
+)"
+echo "OK checkout pin ${GFCC_SHA} l0 ${l0_ver}"
 
 snap() {
   docker inspect -f '{{.Id}}' "$1"
@@ -161,7 +169,7 @@ tport="$(docker port tatha-mbti 8010/tcp | head -n 1)"
 pport="$(docker port gfcc-pgvector 5432/tcp | head -n 1)"
 [ "$pport" = "127.0.0.1:5434" ] || { echo "REFUSE: gfcc-pgvector 端口 $pport" >&2; exit 1; }
 
-printf 'vultr=%s\ngfcc=%s\nl0=1.3.0\nschema=memory.v1\n' "$VULTR_SHA" "$GFCC_SHA" > "$REPO/.staging-delivery"
+printf 'vultr=%s\ngfcc=%s\nl0=%s\nschema=memory.v1\n' "$VULTR_SHA" "$GFCC_SHA" "$l0_ver" > "$REPO/.staging-delivery"
 
 # 端到端冒烟：/v1/ask + context.port_hint=memory，带原始 X-Actor-Sub。
 # 只读、不写库；空结果按契约也算成功。free 档 ask 配额是 1 次/进程·天，
@@ -245,5 +253,5 @@ grep -qi "circle" /tmp/circle-smoke.html || { echo "REFUSE: /circle/ 响应不�
 rm -f /tmp/circle-smoke.html
 kver="$(grep -m1 '^version' "$KERNEL_SRC/services/gfcc_kernel/pyproject.toml" | sed 's/.*"\(.*\)".*/\1/')"
 
-printf 'vultr=%s\ngfcc=%s\nl0=1.3.0\nschema=memory.v1\nkernel=%s@%s\n' \
-  "$VULTR_SHA" "$GFCC_SHA" "$kver" "$(printf %s "$GFCC_SHA" | cut -c1-7)" > "$REPO/.staging-delivery"
+printf 'vultr=%s\ngfcc=%s\nl0=%s\nschema=memory.v1\nkernel=%s@%s\n' \
+  "$VULTR_SHA" "$GFCC_SHA" "$l0_ver" "$kver" "$(printf %s "$GFCC_SHA" | cut -c1-7)" > "$REPO/.staging-delivery"

@@ -7,7 +7,8 @@
 #   这次联调在预发机上要落地的：
 #     1. /opt/src/Vultr-Genzltd 检出切到本工作流的提交
 #     2. contracts/gfcc 换成 gfcc_ref 那一提交的字节，SOURCE.json 钉着该提交
-#        （L0 必须是 1.3.0）。这是消费者钉，不在服务器上改协议字段。
+#        一步钉到 L0 1.5.0 + 信号 1.1.0（4f0dc4b，含 job_match / value_axis_choice）。
+#        同一提交带上支付契约 1.3.0。这是消费者钉，不在服务器上改协议字段。
 #     3. 按该检出重建并只重启 tatha（127.0.0.1:5210）
 #     4. 空的 pgvector，库名 gfcc，只绑 127.0.0.1:5434
 #
@@ -40,7 +41,7 @@ on:
       gfcc_ref:
         description: 'GenzLTD/gfcc 的完整提交。契约字节只从这一提交拷贝。'
         required: true
-        default: '3dcb0846ae471ab37367596d61ec8aeadad34ba6'
+        default: '4f0dc4ba5c15861fbe56e0ad63e762003b80bf62'
         type: string
 
 permissions:
@@ -52,7 +53,7 @@ concurrency:
 
 jobs:
   pin:
-    name: 钉 GFCC 1.3.0
+    name: 钉 GFCC 1.5.0
     runs-on: ubuntu-latest
     outputs:
       gfcc_sha: ${{ steps.vendor.outputs.gfcc_sha }}
@@ -128,6 +129,13 @@ jobs:
           set -euo pipefail
           bash scripts/vendor-gfcc-pin.sh gfcc-src contracts/gfcc
           echo "gfcc_sha=$(git -C gfcc-src rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          import json, os
+          pin = json.load(open("contracts/gfcc/SOURCE.json", encoding="utf-8"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"l0_version={pin['families']['l0']['version']}\n")
+              out.write(f"signal_version={pin['families']['signal']['version']}\n")
+          PY
 
       - name: 契约层门禁
         run: bash scripts/assert-contracts.sh
@@ -155,7 +163,7 @@ jobs:
 
       - name: 这次预发做到哪、还缺什么
         run: |
-          echo "契约钉来自 gfcc ${{ steps.vendor.outputs.gfcc_sha }}，L0 1.3.0。不打 stack-v*。"
+          echo "契约钉来自 gfcc ${{ steps.vendor.outputs.gfcc_sha }}，L0 ${{ steps.vendor.outputs.l0_version }}，信号 ${{ steps.vendor.outputs.signal_version }}。不打 stack-v*。"
           echo "zervi-rust 不部署。Win 或 Mac 仿真网关，经 nginx 或隧道访问 127.0.0.1:5210。"
           echo "Tatha 侧已接 memory.recall：/v1/ask + context.port_hint=memory，只读 X-Actor-Sub（原始 claims.sub）。"
           echo "memory 存储结构由本次流水线显式迁移（compose/sql/gfcc-memory-v1.sql），不依赖 initdb.d。"

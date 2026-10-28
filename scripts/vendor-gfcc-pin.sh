@@ -1,7 +1,8 @@
 #!/bin/sh
 # 把 GenzLTD/gfcc 某一提交的契约字节拷进本仓 contracts/gfcc，并改 SOURCE.json 的钉。
-# 只改 commit、pinned_at、家族 version。不改协议字段。
-# L0 必须是 1.3.0，否则拒绝。
+# 只改 commit、pinned_at、家族 version，以及真源里新出现且版本与该家族一致的文件清单。
+# 不改协议字段。
+# 这次预发只收一对：L0 1.5.0 + 信号 1.1.0（含 job_match、value_axis_choice）。
 set -eu
 
 GFCC_SRC="${1:?用法: vendor-gfcc-pin.sh <gfcc 检出> <contracts/gfcc 目录>}"
@@ -40,27 +41,62 @@ if len(sha) < 40:
 
 memory = json.loads((src / "memory.v1.json").read_text(encoding="utf-8"))
 signal = json.loads((src / "signal.envelope.v1.json").read_text(encoding="utf-8"))
-if memory.get("version") != "1.3.0":
-    raise SystemExit(f"FAIL: memory.v1.json version={memory.get('version')}，本预发只收 1.3.0")
+pair = (memory.get("version"), signal.get("version"))
+if pair != ("1.5.0", "1.1.0"):
+    raise SystemExit(
+        "FAIL: 本预发只收 L0 1.5.0+信号 1.1.0；"
+        f"收到 l0={pair[0]} signal={pair[1]}"
+    )
 
 pin_path = dest / "SOURCE.json"
 pin = json.loads(pin_path.read_text(encoding="utf-8"))
 if pin.get("authority") != "GenzLTD/gfcc":
     raise SystemExit("FAIL: SOURCE.json.authority 必须保持 GenzLTD/gfcc")
 
+def family_of(rel: str) -> str:
+    if rel.startswith("signals/") or rel.startswith("signal."):
+        return "signal"
+    return "l0"
+
+def read_version(path: Path):
+    data = json.loads(path.read_text(encoding="utf-8"))
+    version = data.get("version")
+    return str(version) if version else ""
+
+discovered = {"l0": [], "signal": []}
+candidates = sorted(p for p in src.glob("*.json") if p.name != "SOURCE.json")
+signals_dir = src / "signals"
+if signals_dir.is_dir():
+    candidates.extend(sorted(signals_dir.glob("*.json")))
+versions = {"l0": pair[0], "signal": pair[1]}
+for path in candidates:
+    rel = path.relative_to(src).as_posix()
+    fam = family_of(rel)
+    if read_version(path) == versions[fam]:
+        discovered[fam].append(rel)
+
 families = pin.get("families") or {}
-versions = {"l0": memory["version"], "signal": signal.get("version")}
 for family, spec in families.items():
     expected = versions.get(family)
     if not expected:
         raise SystemExit(f"FAIL: 不知道家族 {family} 的 version 该从哪份契约读")
-    for rel in spec.get("files") or []:
+    listed = list(spec.get("files") or [])
+    known = set(listed)
+    for rel in discovered[family]:
+        if rel not in known:
+            listed.append(rel)
+            known.add(rel)
+    for rel in listed:
         source = src / rel
         target = dest / rel
         if not source.is_file():
             raise SystemExit(f"FAIL: 真源缺少 {rel}")
+        got = read_version(source)
+        if got != expected:
+            raise SystemExit(f"FAIL: {rel} version={got}，家族 {family} 要求 {expected}")
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
+    spec["files"] = listed
     spec["version"] = expected
 
 pin["commit"] = sha

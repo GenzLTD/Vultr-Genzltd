@@ -1,6 +1,6 @@
 """memory 端口的 gfcc 存储读取层（只读）。
 
-契约真源：GenzLTD/gfcc@3dcb084 ``contracts/memory.v1.json``（1.3.0）
+契约真源：GenzLTD/gfcc@4f0dc4b ``contracts/memory.v1.json``（1.5.0）
     * ``store_slot.link = actor_sub``
     * ``optional_adapters`` 含 ``gfcc``：「pgvector 库 gfcc。与 cortex-mcp 只通过 actor_sub 关联。」
     * ``recall`` = ``scope: memory.read`` / ``min_role: observer``

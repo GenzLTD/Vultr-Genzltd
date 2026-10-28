@@ -6,10 +6,10 @@
 
 | 族 | 当前钉 | 入口 |
 |---|---|---|
-| Ask + 五端口 + roles + registry | **1.3.0** | `POST /v1/ask` |
-| 信号信封 + `signals/*` | **1.0.0** | `POST /v1/signal-ingest` |
+| Ask + 五端口 + roles + registry + job_match | **1.5.0** | `POST /v1/ask` |
+| 信号信封 + `signals/*` | **1.1.0** | `POST /v1/signal-ingest` |
 
-钉点见 [`gfcc/SOURCE.json`](gfcc/SOURCE.json)（commit `3dcb0846…`，2026-10-18）。
+钉点见 [`gfcc/SOURCE.json`](gfcc/SOURCE.json)（commit `4f0dc4ba…`，2026-10-27）。
 
 ## 本仓认什么 / 不认什么
 
