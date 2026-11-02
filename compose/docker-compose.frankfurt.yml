@@ -31,9 +31,15 @@ services:
   # 由 remote.sh 按 pin 写进 .staging-gfcc.env）。本 overlay 只保留预发专用的
   # stub 鉴权覆盖：ETHOS_AUTH_SECRET 留空 = 假 JWT 可建圈，仅限回环联调；
   # 新加坡由 deploy.yml 的 nginx 门禁强制该值非空。其余字段以基座为准。
+  #
+  # SIGNAL_INGEST_SECRET：必须非空。留空会让 kernel 进入 dev no-auth，
+  # 未签名 ingest 变成 422 而非 401（2026-11-02 FRA 回归）。:? 让 compose
+  # 在缺密钥时直接失败，禁止静默重演。密钥只进机器 .staging-gfcc.env /
+  # ingest.env，永不入库。
   gfcc-kernel:
     environment:
       ETHOS_AUTH_SECRET: ""
+      SIGNAL_INGEST_SECRET: ${SIGNAL_INGEST_SECRET:?set SIGNAL_INGEST_SECRET in .staging-gfcc.env or /opt/looma-fra-emit/ingest.env}
 
 volumes:
   gfcc-pgvector-data:

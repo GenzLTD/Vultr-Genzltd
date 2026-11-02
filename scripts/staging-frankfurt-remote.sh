@@ -88,6 +88,29 @@ COMPOSE="docker compose --env-file $REPO/.staging-gfcc.env -f $REPO/compose/dock
 sed -i '/^GFCC_KERNEL_IMAGE=/d' "$REPO/.staging-gfcc.env"
 printf 'GFCC_KERNEL_IMAGE=gfcc-kernel:stage-%s\n' "$GFCC_SHA" >> "$REPO/.staging-gfcc.env"
 
+# SIGNAL_INGEST_SECRET：从机器本地 ingest.env 注入 .staging-gfcc.env（不打印值）。
+# 缺密钥则 fail-fast —— 禁止 recreate kernel 后静默 no-auth（未签名变 422）。
+INGEST_ENV_CANDIDATES="/opt/looma-fra-emit/ingest.env /root/looma-fra-emit/ingest.env"
+if ! grep -q '^SIGNAL_INGEST_SECRET=.\+' "$REPO/.staging-gfcc.env" 2>/dev/null; then
+  injected=0
+  for cand in $INGEST_ENV_CANDIDATES; do
+    if [ -f "$cand" ] && grep -q '^SIGNAL_INGEST_SECRET=.\+' "$cand"; then
+      sed -i '/^SIGNAL_INGEST_SECRET=/d' "$REPO/.staging-gfcc.env"
+      grep '^SIGNAL_INGEST_SECRET=' "$cand" >> "$REPO/.staging-gfcc.env"
+      chmod 600 "$REPO/.staging-gfcc.env"
+      injected=1
+      echo "OK SIGNAL_INGEST_SECRET 已从机器 ingest.env 注入 .staging-gfcc.env（不入库）"
+      break
+    fi
+  done
+  if [ "$injected" != 1 ]; then
+    echo "REFUSE: SIGNAL_INGEST_SECRET 缺失。请在预发机写入 /opt/looma-fra-emit/ingest.env 或 .staging-gfcc.env（永不 commit）。缺密钥会让 gfcc-kernel 进入 no-auth。" >&2
+    exit 1
+  fi
+else
+  echo "OK .staging-gfcc.env 已含 SIGNAL_INGEST_SECRET"
+fi
+
 # 本提交把 gfcc-kernel 上移基座 compose（circle 生产化，与新加坡同款定义）：
 # 预发要证明「服务定义已在基座单文件里」，overlay 只剩 stub 覆盖。
 # 注意不能对基座跑全量 `docker compose config` 渲染：法兰克福 src 检出刻意没有
@@ -214,7 +237,9 @@ kimg="gfcc-kernel:stage-$GFCC_SHA"
 docker build -f "$REPO/docker/Dockerfile.gfcc-kernel" -t "$kimg" "$KERNEL_SRC" \
   || { echo "REFUSE: kernel 镜像构建失败" >&2; exit 1; }
 
-$COMPOSE up -d --no-deps gfcc-kernel
+# --force-recreate：保证本次注入的 SIGNAL_INGEST_SECRET 进入容器 env
+#（仅 up -d 时旧容器会带着 MISSING secret 继续跑）。
+$COMPOSE up -d --no-deps --force-recreate gfcc-kernel
 
 khealthy=0
 i=1
@@ -231,6 +256,11 @@ done
 kport="$(docker port gfcc-kernel 5211/tcp | head -n 1)"
 [ "$kport" = "127.0.0.1:5211" ] || { echo "REFUSE: kernel 端口 $kport" >&2; exit 1; }
 
+# 容器内必须看见密钥（只报长度，不打印值）
+sec_len="$(docker exec gfcc-kernel sh -c 'printf %s "${SIGNAL_INGEST_SECRET:-}" | wc -c' | tr -d ' ')"
+[ "${sec_len:-0}" -gt 0 ] || { echo "REFUSE: gfcc-kernel 容器内 SIGNAL_INGEST_SECRET 仍为空（no-auth 风险）" >&2; exit 1; }
+echo "OK kernel SIGNAL_INGEST_SECRET 已注入（len=$sec_len）"
+
 # SQLite 落盘校验 = 这一刀的迁移验证：库文件必须真的在卷上，不能是内存 stub。
 for dbf in data/memory.db data/circle_flow.db; do
   docker exec gfcc-kernel test -s "/app/$dbf" \
@@ -243,7 +273,43 @@ ccode="$(curl -s -o /tmp/circle-smoke.html -w '%{http_code}' --max-time 10 http:
 [ "$ccode" = "200" ] || { echo "REFUSE: kernel /circle/ HTTP $ccode" >&2; exit 1; }
 grep -qi "circle" /tmp/circle-smoke.html || { echo "REFUSE: /circle/ 响应不像会场页" >&2; exit 1; }
 rm -f /tmp/circle-smoke.html
-kver="$(grep -m1 '^version' "$KERNEL_SRC/services/gfcc_kernel/pyproject.toml" | sed 's/.*"\(.*\)".*/\1/')"
 
-printf 'vultr=%s\ngfcc=%s\nl0=1.3.0\nschema=memory.v1\nkernel=%s@%s\n' \
-  "$VULTR_SHA" "$GFCC_SHA" "$kver" "$(printf %s "$GFCC_SHA" | cut -c1-7)" > "$REPO/.staging-delivery"
+# ---- 鉴权门禁（Dell/Win 2026-11-02）：禁止 no-auth 回归 ----
+# 未签名 → 401；value-axes（ETHOS 空）→ 503；带签名但混入职位分字段 → 422；合法签名 → 200
+unsigned_code="$(curl -s -o /tmp/sig-unsigned.json -w '%{http_code}' --max-time 10 \
+  -H 'Content-Type: application/json' \
+  -d '{"signal_type":"personality_beacon","user_id_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","nonce":"stagingunsigned1","payload":{"personality_type":"INTJ","source":"planetx"}}' \
+  http://127.0.0.1:5211/v1/signal-ingest || true)"
+[ "$unsigned_code" = "401" ] || { echo "REFUSE: 未签名 ingest 期望 401，实际 $unsigned_code（疑似 no-auth）：$(head -c 200 /tmp/sig-unsigned.json)" >&2; exit 1; }
+echo "OK 未签名 ingest → 401"
+
+va_code="$(curl -s -o /tmp/va-smoke.json -w '%{http_code}' --max-time 10 \
+  -H 'Content-Type: application/json' \
+  -d '{"op":"read","user_id_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' \
+  http://127.0.0.1:5211/v1/identity/value-axes || true)"
+[ "$va_code" = "503" ] || { echo "REFUSE: value-axes 期望 503 auth_unconfigured（预发 ETHOS 空），实际 $va_code：$(head -c 200 /tmp/va-smoke.json)" >&2; exit 1; }
+echo "OK value-axes → 503"
+
+BODY_BAD='{"signal_type":"personality_beacon","user_id_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","nonce":"stagingjobfields1","payload":{"personality_type":"INTJ","source":"planetx","salary_match":1,"overall":1}}'
+SIG_BAD="$(SIGNAL_INGEST_SECRET="$(grep '^SIGNAL_INGEST_SECRET=' "$REPO/.staging-gfcc.env" | cut -d= -f2-)" python3 -c 'import hmac,hashlib,os,sys; print(hmac.new(os.environ["SIGNAL_INGEST_SECRET"].encode(), sys.argv[1].encode(), hashlib.sha256).hexdigest())' "$BODY_BAD")"
+job_code="$(curl -s -o /tmp/job-fields.json -w '%{http_code}' --max-time 10 \
+  -H 'Content-Type: application/json' -H "X-Signature: $SIG_BAD" \
+  -d "$BODY_BAD" http://127.0.0.1:5211/v1/signal-ingest || true)"
+[ "$job_code" = "422" ] || { echo "REFUSE: 职位分字段混入 beacon 期望 422，实际 $job_code：$(head -c 200 /tmp/job-fields.json)" >&2; exit 1; }
+echo "OK job-score 字段拒绝 → 422"
+
+BODY_OK='{"signal_type":"personality_beacon","user_id_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","nonce":"stagingsignedok01","payload":{"personality_type":"INTJ","source":"planetx"}}'
+SIG_OK="$(SIGNAL_INGEST_SECRET="$(grep '^SIGNAL_INGEST_SECRET=' "$REPO/.staging-gfcc.env" | cut -d= -f2-)" python3 -c 'import hmac,hashlib,os,sys; print(hmac.new(os.environ["SIGNAL_INGEST_SECRET"].encode(), sys.argv[1].encode(), hashlib.sha256).hexdigest())' "$BODY_OK")"
+signed_code="$(curl -s -o /tmp/sig-ok.json -w '%{http_code}' --max-time 10 \
+  -H 'Content-Type: application/json' -H "X-Signature: $SIG_OK" \
+  -d "$BODY_OK" http://127.0.0.1:5211/v1/signal-ingest || true)"
+[ "$signed_code" = "200" ] || { echo "REFUSE: 合法签名 ingest 期望 200，实际 $signed_code：$(head -c 200 /tmp/sig-ok.json)" >&2; exit 1; }
+echo "OK 合法签名 ingest → 200"
+rm -f /tmp/sig-unsigned.json /tmp/va-smoke.json /tmp/job-fields.json /tmp/sig-ok.json
+
+kver="$(grep -m1 '^version' "$KERNEL_SRC/services/gfcc_kernel/pyproject.toml" | sed 's/.*"\(.*\)".*/\1/')"
+kcid="$(docker inspect -f '{{.Id}}' gfcc-kernel)"
+kdigest="$(docker image inspect "$(docker inspect -f '{{.Image}}' gfcc-kernel)" -f '{{.Id}}')"
+
+printf 'vultr=%s\ngfcc=%s\nl0=1.3.0\nschema=memory.v1\nkernel=%s@%s\nkernel_container=%s\nkernel_image_digest=%s\n' \
+  "$VULTR_SHA" "$GFCC_SHA" "$kver" "$(printf %s "$GFCC_SHA" | cut -c1-7)" "$kcid" "$kdigest" > "$REPO/.staging-delivery"
