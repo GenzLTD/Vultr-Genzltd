@@ -1,0 +1,20 @@
+name: Assert looma join blobs
+on:
+  pull_request:
+    paths:
+      - "backend/src/identity/**"
+      - "backend/src/payment/settlement.py"
+      - "backend/src/api/routes/payment_routes.py"
+      - "backend/src/api/routes/huawei_iap_routes.py"
+      - "backend/src/db/manager.py"
+      - "scripts/assert-looma-join-blobs.sh"
+      - "docs/fra-machine-wip-snapshot-20261102/BLOBS.md"
+      - ".github/workflows/assert-looma-join-blobs.yml"
+  workflow_dispatch:
+jobs:
+  blobs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert 6 join blobs match looma lock
+        run: bash scripts/assert-looma-join-blobs.sh
