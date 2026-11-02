@@ -1,0 +1,1 @@
+{"git_commit":"e18b794f25c3ee5c3fce950096235572e62a2ee5","llm_configured":false,"llm_provider":"deepseek","llm_provider_order":["deepseek","ollama"],"providers_configured":{"deepseek":false,"ollama":true,"openai":false},"qcc_configured":false,"service":"looma-backend","status":"degraded","version":"v1"}

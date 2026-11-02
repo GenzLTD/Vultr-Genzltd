@@ -170,13 +170,18 @@ def _process_delivery(purchase_data: dict, user_id: str) -> tuple[bool, str]:
     )
     tier = TIER_MAP.get(product_id, "supporter")
 
+    try:
+        settle_uid = resolve_settlement_user_id(db, session_user_id=user_id)
+    except AmbiguousLedgerSubject as exc:
+        return False, f"ambiguous_subject:{exc}"
+
     # --- 写入订单 ---
     out_trade_no = f"LOOMA_HW_{order_id or purchase_token[:16]}"
     amount_value = float(purchase_data.get("price", 0))
     currency = purchase_data.get("currency", "CNY")
 
     order = db.create_order(
-        user_id=user_id,
+        user_id=settle_uid,
         plan_id=f"huawei_{product_id}",
         tier=tier,
         amount=amount_value,
@@ -192,13 +197,16 @@ def _process_delivery(purchase_data: dict, user_id: str) -> tuple[bool, str]:
 
     # --- 标记支付 + 升级 tier + 创建订阅 ---
     db.mark_order_paid(out_trade_no, purchase_token)
-    db.update_user_tier(user_id, tier)
-
     expires = (datetime.now() + timedelta(days=30)).isoformat()
-    db.upsert_subscription(user_id, tier, f"huawei_{product_id}", expires, auto_renew=False)
+    db.upsert_subscription(settle_uid, tier, f"huawei_{product_id}", expires, auto_renew=False)
+    if hasattr(db, "recompute_user_tier"):
+        db.recompute_user_tier(settle_uid)
+    else:
+        db.update_user_tier(settle_uid, tier)
 
     logger.info(
-        f"[huawei_iap] Delivery complete: user={user_id} tier={tier} "
+        f"[huawei_iap] Delivery complete: user={settle_uid} "
+        f"principal_sub={ensure_principal_sub(db, settle_uid)} tier={tier} "
         f"product={product_id} order={out_trade_no}"
     )
     return True, order_id

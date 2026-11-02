@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash   TEXT,                      -- bcrypt hash (nullable for miniprogram-only)
     wechat_openid   TEXT UNIQUE,               -- WeChat miniprogram login
     supabase_uid    TEXT UNIQUE,               -- Supabase Auth user UUID (THOMAS 统一身份, RFC supabase-unified-auth-v1)
+    principal_sub   TEXT UNIQUE,               -- GFCC principal.sub bootstrap=id
     name            TEXT DEFAULT '',
     tier            TEXT DEFAULT 'free',       -- free | supporter | pro
     role            TEXT DEFAULT 'user',       -- user | enterprise | admin | driver
@@ -1325,6 +1326,31 @@ class DatabaseManager:
                     "Migration UNIQUE INDEX idx_users_supabase_uid failed: %s", e
                 )
 
+            # Migration: principal_sub — GFCC principal.sub ↔ users.id
+            try:
+                conn.execute("ALTER TABLE users ADD COLUMN principal_sub TEXT")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e):
+                    logger.warning(
+                        "Migration ALTER TABLE users ADD COLUMN principal_sub failed: %s", e
+                    )
+            try:
+                conn.execute(
+                    "UPDATE users SET principal_sub = id "
+                    "WHERE principal_sub IS NULL OR trim(principal_sub) = ''"
+                )
+            except sqlite3.OperationalError as e:
+                logger.warning("Migration backfill principal_sub failed: %s", e)
+            try:
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_principal_sub "
+                    "ON users(principal_sub)"
+                )
+            except sqlite3.OperationalError as e:
+                logger.warning(
+                    "Migration UNIQUE INDEX idx_users_principal_sub failed: %s", e
+                )
+
             # ============================================================
             # Migration: 驾驶员 / 多租户（清单 §1.1 ~ §1.5）
             #   结构部分（加列 + 索引 + 触发器）必须幂等；
@@ -1429,11 +1455,28 @@ END;
         user_id = str(uuid.uuid4())
         with self.get_conn() as conn:
             conn.execute(
-                """INSERT INTO users (id, email, email_hash, password_hash, wechat_openid, name)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (user_id, email, email_hash(email), password_hash, wechat_openid, name)
+                """INSERT INTO users (id, email, email_hash, password_hash, wechat_openid,
+                   principal_sub, name)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (user_id, email, email_hash(email), password_hash, wechat_openid,
+                 user_id, name)
             )
         return user_id
+
+    def set_principal_sub(self, user_id: str, principal_sub: str):
+        """Persist GFCC principal.sub (or bootstrap equivalent) for a user."""
+        with self.get_conn() as conn:
+            conn.execute(
+                "UPDATE users SET principal_sub = ?, updated_at = datetime('now') WHERE id = ?",
+                (principal_sub, user_id),
+            )
+
+    def get_user_by_principal_sub(self, principal_sub: str):
+        with self.get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM users WHERE principal_sub = ?", (principal_sub,)
+            ).fetchone()
+        return dict(row) if row else None
 
     def get_user_by_email(self, email: str):
         with self.get_conn() as conn:
@@ -1622,10 +1665,11 @@ END;
         user_id = str(uuid.uuid4())
         with self.get_conn() as conn:
             conn.execute(
-                """INSERT INTO users (id, email, email_hash, supabase_uid, wechat_openid, name)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO users (id, email, email_hash, supabase_uid, wechat_openid,
+                principal_sub, name)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (user_id, email or None, email_hash(email or None), supabase_uid,
-                 wechat_openid, name),
+                 wechat_openid, user_id, name),
             )
         return self.get_user_by_id(user_id), True
 
@@ -1705,8 +1749,9 @@ END;
         user_id = str(uuid.uuid4())
         with self.get_conn() as conn:
             conn.execute(
-                """INSERT INTO users (id, email, email_hash, name) VALUES (?, ?, ?, ?)""",
-                (user_id, email or None, email_hash(email or None), name)
+                """INSERT INTO users (id, email, email_hash, principal_sub, name)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (user_id, email or None, email_hash(email or None), user_id, name)
             )
             conn.execute(
                 """INSERT INTO user_identities (id, user_id, provider, provider_uid,
