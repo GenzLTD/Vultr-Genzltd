@@ -13,8 +13,7 @@
 >
 > 采集时间 2026-10-13。**标「待核实」的项未经实证，动手前先核。**
 >
-> **当前状态（2026-10-13）：本表为事实记录，未授权据此动手。** `circle` 维持关闭、
-> 不杀进程；不跳到 P2 去改生产编排。
+> **当前状态（2026-11-02）：本表为事实记录，未授权据此打 `stack-v*`。** 现网钉已从 `stack-v0.1.5` 前移到 **`stack-v0.1.10` / `f3cde010`**（勿再把法兰克福预发当成 `api.genz.ltd`）。`circle` 维持关闭、不杀进程；不跳到 P2 去改生产编排。下一枚 tag 前须先完成 **GFCC L0 1.6.0（`1474d37`）消费者钉汇合 + 法兰克福绿**（见 Project playbook；`payment.v1` 为另账，非此硬钉）。
 
 ---
 
@@ -22,8 +21,8 @@
 
 | 域名 | 服务 | 代码真源 | 平台 / CI | 触发条件 | 部署目标 | **回滚方式** | 现状 |
 |---|---|---|---|---|---|---|---|
-| `api.genz.ltd` | backend (Flask :5200) | 本仓 `Vultr-Genzltd` `backend/` | 本仓 `deploy.yml` | `stack-v*` tag（且 `DEPLOY_ENABLED=true`） | SG `/opt/looma-zervi` | `scripts/rollback-release.sh --apply`；`/health` 死则恢复 compose 备份 | `stack-v0.1.5` = `e4e72279`（2026-10-13） |
-| `tspace.genz.ltd` | saas 前端 | 本仓 `frontend/`（`SOURCE.json` 声明海外 tspace 在本仓维护） | 同 `deploy.yml` 步骤 5 | 同 `stack-v*` | SG `/var/www/saas/dist` | **无独立回滚**：随后端 release 一起发布，但 `rollback-release.sh` 只 rsync `backend/`，不含前端 | 同 `stack-v0.1.5` |
+| `api.genz.ltd` | backend (Flask :5200) | 本仓 `Vultr-Genzltd` `backend/` | 本仓 `deploy.yml` | `stack-v*` tag（且 `DEPLOY_ENABLED=true`） | SG `/opt/looma-zervi` | `scripts/rollback-release.sh --apply`；`/health` 死则恢复 compose 备份 | **现网** `stack-v0.1.10` = `f3cde010`（2026-11-02 `/health`）；`origin/main` tip `072d962`（#56 entitlement）**未打 tag**。法兰克福预发 `45.76.84.90` ≠ SG，见 `staging-frankfurt.yml` |
+| `tspace.genz.ltd` | saas 前端 | 本仓 `frontend/`（`SOURCE.json` 声明海外 tspace 在本仓维护） | 同 `deploy.yml` 步骤 5 | 同 `stack-v*` | SG `/var/www/saas/dist` | **无独立回滚**：随后端 release 一起发布，但 `rollback-release.sh` 只 rsync `backend/`，不含前端 | 同现网 `stack-v0.1.10` |
 | `app.genz.ltd` | planet-x | `looma-zervi` → Vercel | Vercel（team `team_7yn...`） | Vercel 侧 git push 自动部署 | Vercel 边缘 | Vercel Instant Rollback（与本仓**无联动**） | 构建源停 `d8f4c8d2`（2026-08-17），与后端差约 55 天 |
 | `circle.genz.ltd` | kernel | — | **无** | **无** | SG `:5211` 裸 uvicorn（不在 compose） | **无回滚概念**（根本没有发布） | 公网 404，nginx include 仍注释，进程仍在跑 |
 | `genz.ltd` | genz-web | `GenzLTD/genz-web` | Vercel | Vercel git 集成 | Vercel 边缘 | Vercel 回滚 | 部署时间未提供 |
