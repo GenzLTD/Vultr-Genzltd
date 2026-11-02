@@ -1,0 +1,68 @@
+# =============================================================
+# SG Inventory — 只读盘点（仅 workflow_dispatch，push 不触发）
+# 目的：查清 Deploy stack CI 实际部署了哪些项目仓/工件，不做任何变更。
+# =============================================================
+name: SG Inventory
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sg-inventory
+  cancel-in-progress: false
+
+jobs:
+  inventory:
+    name: Read-only SSH inventory of SG
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_inv
+          chmod 600 ~/.ssh/id_inv
+          ssh-keyscan -H 139.180.184.25 >> ~/.ssh/known_hosts 2>/dev/null
+          echo "SSH_CMD=ssh -i ~/.ssh/id_inv -o BatchMode=yes -o ServerAliveInterval=30" >> $GITHUB_ENV
+          echo "DEPLOY_TARGET=root@139.180.184.25" >> $GITHUB_ENV
+
+      - name: Inventory (read-only)
+        run: |
+          set -euo pipefail
+          $SSH_CMD "$DEPLOY_TARGET" 'bash -s' << 'REMOTE'
+          set -u
+          echo "===== 0. 主机 ====="
+          hostname; uname -r; uptime
+          echo "===== 1. docker 容器全景 ====="
+          docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+          echo "===== 2. looma 部署目录 /opt/looma-zervi ====="
+          ls -la /opt/looma-zervi 2>/dev/null | head -30
+          echo "--- git_commit.txt ---"
+          cat /opt/looma-zervi/backend/git_commit.txt 2>/dev/null || echo "(无)"
+          echo "--- compose 服务定义 ---"
+          grep -E '^\s{2}[a-z][a-z0-9_-]+:' /opt/looma-zervi/docker/docker-compose.yml 2>/dev/null || echo "(读不到 compose)"
+          echo "===== 3. vultr-genzltd-stack release 树 ====="
+          ls -la /opt/vultr-genzltd-stack 2>/dev/null
+          echo "--- releases ---"
+          ls -1t /opt/vultr-genzltd-stack/releases 2>/dev/null | head -10
+          echo "--- current 指向 ---"
+          readlink -f /opt/vultr-genzltd-stack/current 2>/dev/null || echo "(无 current)"
+          echo "--- current 顶层内容（识别来源仓） ---"
+          ls -la /opt/vultr-genzltd-stack/current 2>/dev/null | head -40
+          echo "===== 4. gfcc 源码克隆 ====="
+          git -C /opt/src/gfcc rev-parse HEAD 2>/dev/null && git -C /opt/src/gfcc remote -v 2>/dev/null | head -2 || echo "(无 /opt/src/gfcc)"
+          echo "===== 5. 其他 /opt 项目目录 ====="
+          ls -la /opt 2>/dev/null
+          echo "===== 6. 静态站点目录 ====="
+          for d in /var/www/planetx/dist /var/www/saas/dist /var/www/html; do
+            echo "--- $d ---"; ls "$d" 2>/dev/null | head -8 || echo "(不存在)"
+          done
+          echo "===== 7. nginx 站点 ====="
+          ls -1 /etc/nginx/sites-enabled 2>/dev/null || echo "(无 sites-enabled)"
+          echo "===== 8. 数据卷 ====="
+          ls -la /opt/looma-zervi/data 2>/dev/null | head -20
+          echo "===== 9. signal/emit 相关 ====="
+          ls -la /opt/looma-fra-emit 2>/dev/null || echo "(无 looma-fra-emit)"
+          REMOTE
