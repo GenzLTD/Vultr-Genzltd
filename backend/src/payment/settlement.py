@@ -10,6 +10,12 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
+from src.identity.ledger_subject import (
+    AmbiguousLedgerSubject,
+    ensure_principal_sub,
+    resolve_settlement_user_id,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -67,13 +73,23 @@ def settle_payment(
         _remember_provider_refs(db, order["id"], customer_id, subscription_id)
         return None
 
+    try:
+        user_id = resolve_settlement_user_id(
+            db, order_user_id=order["user_id"]
+        )
+    except AmbiguousLedgerSubject as exc:
+        logger.error(
+            "[%s] Ambiguous ledger subject for %s: %s",
+            provider_name, out_trade_no, exc,
+        )
+        return None
+
     paid_order = db.mark_order_paid(out_trade_no, transaction_id)
     if not paid_order:
         return None
 
     _remember_provider_refs(db, paid_order["id"], customer_id, subscription_id)
 
-    user_id = paid_order["user_id"]
     tier = paid_order["tier"]
     plan_id = paid_order["plan_id"]
 
@@ -89,6 +105,10 @@ def settle_payment(
     # 旧代码在这里 `db.update_user_tier(user_id, tier)`（last-write-wins），
     # 会把用户在另一条轨（Apple IAP）上**档位更高且仍有效**的订阅反向拉低。
     granted = db.recompute_user_tier(user_id)
+    logger.info(
+        "[%s] settled user=%s principal_sub=%s tier=%s order=%s",
+        provider_name, user_id, ensure_principal_sub(db, user_id), granted, out_trade_no,
+    )
 
     logger.info(
         "[%s] Payment confirmed: user=%s order_tier=%s granted_tier=%s order=%s txn=%s sub=%s",

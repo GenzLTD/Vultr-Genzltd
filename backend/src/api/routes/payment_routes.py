@@ -22,6 +22,11 @@ For production, set PAYMENT_STUB_MODE=false and configure payment credentials.
 from flask import Blueprint, jsonify, g, request, current_app
 
 from src.api.auth.decorators import require_auth
+from src.identity.ledger_subject import (
+    AmbiguousLedgerSubject,
+    ensure_principal_sub,
+    resolve_settlement_user_id,
+)
 from src.api.auth.jwt_handler import sign_token_for_user
 from src.analytics.events import (
     log_product_event,
@@ -166,11 +171,14 @@ def payment_status():
         except KeyError:
             plan = get_plan_for_tier("free", region)
 
+    principal_sub = ensure_principal_sub(db, g.user_id)
     return jsonify(
         tier=tier,
         plan=plan,
         status=sub_status,
         expires_at=expires_at,
+        principal_sub=principal_sub,
+        user_id=g.user_id,
     )
 
 
@@ -319,10 +327,19 @@ def create_wechat_order():
     # Stub：仅 CN 计费区发模拟码。新加坡部署位到不了这里。
     if _is_stub_mode():
         db = current_app._db
+        try:
+            settle_uid = resolve_settlement_user_id(
+                db,
+                session_user_id=g.user_id,
+                issuer="wechat" if openid else None,
+                subject=openid or None,
+            )
+        except AmbiguousLedgerSubject as exc:
+            return jsonify(error="ambiguous_subject", message=str(exc)), 409
         out_trade_no = generate_out_trade_no()
         stub_qr = f"weixin://wxpay/stub/{out_trade_no}"
         order = db.create_order(
-            user_id=g.user_id,
+            user_id=settle_uid,
             plan_id=plan["plan_id"],
             tier=new_tier,
             amount=plan["price_monthly"],
@@ -420,8 +437,17 @@ def create_wechat_order():
 
     # 写入订单表
     db = current_app._db
+    try:
+        settle_uid = resolve_settlement_user_id(
+            db,
+            session_user_id=g.user_id,
+            issuer="wechat" if openid else None,
+            subject=openid or None,
+        )
+    except AmbiguousLedgerSubject as exc:
+        return jsonify(error="ambiguous_subject", message=str(exc)), 409
     order = db.create_order(
-        user_id=g.user_id,
+        user_id=settle_uid,
         plan_id=plan["plan_id"],
         tier=new_tier,
         amount=plan["price_monthly"],
@@ -498,26 +524,32 @@ def wechat_pay_notify():
         resp, code = build_notify_response(True)
         return resp, code, {"Content-Type": "application/json"}
 
-    # 原子操作：标记支付 → 升级 tier → 创建订阅
+    try:
+        user_id = resolve_settlement_user_id(db, order_user_id=order["user_id"])
+    except AmbiguousLedgerSubject as exc:
+        current_app.logger.error(f"[wechat_pay] Ambiguous subject: {exc}")
+        resp, code = build_notify_response(False)
+        return resp, code, {"Content-Type": "application/json"}
+
     paid_order = db.mark_order_paid(result.out_trade_no, result.transaction_id)
     if not paid_order:
         resp, code = build_notify_response(True)
         return resp, code, {"Content-Type": "application/json"}
 
-    user_id = paid_order["user_id"]
     tier = paid_order["tier"]
     plan_id = paid_order["plan_id"]
 
-    # 升级用户 tier
-    db.update_user_tier(user_id, tier)
-
-    # 创建/更新订阅（1 个月有效期）
     from datetime import datetime, timedelta
     expires = (datetime.now() + timedelta(days=30)).isoformat()
     db.upsert_subscription(user_id, tier, plan_id, expires, auto_renew=False)
+    if hasattr(db, "recompute_user_tier"):
+        db.recompute_user_tier(user_id)
+    else:
+        db.update_user_tier(user_id, tier)
 
     current_app.logger.info(
-        f"[wechat_pay] Payment confirmed: user={user_id} tier={tier} "
+        f"[wechat_pay] Payment confirmed: user={user_id} "
+        f"principal_sub={ensure_principal_sub(db, user_id)} tier={tier} "
         f"txn={result.transaction_id} order={result.out_trade_no}"
     )
 
