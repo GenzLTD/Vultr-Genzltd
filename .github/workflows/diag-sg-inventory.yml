@@ -65,4 +65,25 @@ jobs:
           ls -la /opt/looma-zervi/data 2>/dev/null | head -20
           echo "===== 9. signal/emit 相关 ====="
           ls -la /opt/looma-fra-emit 2>/dev/null || echo "(无 looma-fra-emit)"
+          echo "===== 10. nginx 真身与配置来源 ====="
+          ps aux | grep nginx | grep -v grep || echo "(主机无 nginx 进程)"
+          echo "--- nginx.conf include 结构 ---"
+          grep -n "include" /etc/nginx/nginx.conf 2>/dev/null | head -10
+          echo "--- sites-enabled / conf.d ---"
+          ls -la /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null
+          echo "--- 监听端口 80/443 ---"
+          ss -ltnp | grep -E ":80 |:443 " || echo "(主机无 80/443 监听)"
+          echo "===== 11. stack 内 nginx 配置 ====="
+          ls -laR /opt/vultr-genzltd-stack/current/nginx 2>/dev/null | head -40
+          echo "===== 12. 本机回环分层测试 ====="
+          echo "--- A. 直打后端 :5200 /tspace/ ---"
+          curl -sS -o /dev/null -m 5 -w "HTTP %{http_code}\n" http://127.0.0.1:5200/tspace/ 2>&1
+          echo "--- B. 直打后端 :5200 /health ---"
+          curl -sS -o /dev/null -m 5 -w "HTTP %{http_code}\n" http://127.0.0.1:5200/health 2>&1
+          echo "--- C. 打 :80 Host=api.genz.ltd /tspace/ ---"
+          curl -sS -o /dev/null -m 5 -H "Host: api.genz.ltd" -w "HTTP %{http_code}\n" http://127.0.0.1:80/tspace/ 2>&1
+          echo "--- D. 打 :80 Host=api.genz.ltd /health ---"
+          curl -sS -o /dev/null -m 5 -H "Host: api.genz.ltd" -w "HTTP %{http_code}\n" http://127.0.0.1:80/health 2>&1
+          echo "--- E. /tspace/ 404 响应体（辨来源层） ---"
+          curl -sS -m 5 -H "Host: api.genz.ltd" http://127.0.0.1:80/tspace/ 2>&1 | head -c 300
           REMOTE
