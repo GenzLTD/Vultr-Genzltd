@@ -1,0 +1,24 @@
+{
+  "schema": "vultr-genzltd.looma-join-pin.v1",
+  "purpose": "SG release must carry looma join semantics; identity blobs match this looma tip",
+  "looma_repo": "https://github.com/GenzLTD/looma-zervi",
+  "looma_sha": "ad3f39eac2dc591f483d48473c70025e469bafc5",
+  "looma_sha_short": "ad3f39e",
+  "pinned_at": "2026-11-03",
+  "note": "Refresh when intentionally advancing join. Do not wholesale overlay Vultr-old trees over these paths.",
+  "required_same_blob": [
+    "backend/src/identity/__init__.py",
+    "backend/src/identity/ledger_subject.py",
+    "backend/contracts/payment.v1.json"
+  ],
+  "required_markers": [
+    "backend/src/db/manager.py:recompute_user_tier",
+    "backend/src/payment/settlement.py:recompute_user_tier"
+  ],
+  "not_forced_same_blob": [
+    "backend/src/api/routes/payment_routes.py",
+    "backend/src/db/manager.py",
+    "backend/src/api/routes/huawei_iap_routes.py"
+  ],
+  "reason_not_forced": "looma #39 wholesale overlay deleted overseas helpers; prefer marker + identity pin over whole-file blob lock"
+}
