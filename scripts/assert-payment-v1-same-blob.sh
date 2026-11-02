@@ -28,7 +28,11 @@ LOCAL_BLOB="$(git hash-object "$PATH_PAYMENT")"
 echo "local payment.v1 blob=$LOCAL_BLOB"
 
 TMP=""
-cleanup() { [[ -n "${TMP:-}" && -d "$TMP" ]] && rm -rf "$TMP"; }
+cleanup() {
+  if [[ -n "${TMP:-}" && -d "$TMP" ]]; then
+    rm -rf "$TMP"
+  fi
+}
 trap cleanup EXIT
 
 if [[ -n "${LOOMA_CHECKOUT:-}" && -d "$LOOMA_CHECKOUT" ]]; then

@@ -50,7 +50,11 @@ do
 done
 
 TMP=""
-cleanup() { [[ -n "${TMP:-}" && -d "$TMP" ]] && rm -rf "$TMP"; }
+cleanup() {
+  if [[ -n "${TMP:-}" && -d "$TMP" ]]; then
+    rm -rf "$TMP"
+  fi
+}
 trap cleanup EXIT
 
 if [[ -n "${LOOMA_CHECKOUT:-}" && -d "$LOOMA_CHECKOUT" ]]; then
@@ -97,7 +101,6 @@ tip = sys.argv[2]
 want = (pin.get("looma_sha") or "").strip()
 print(f"pin.looma_sha={want or '(empty)'} tip={tip}")
 if want and tip != "unknown" and not tip.startswith(want) and not want.startswith(tip[:12]):
-    # soft: pin may lag tip; print warning only
     print(f"::warning::PIN looma_sha={want} differs from checkout tip={tip} — refresh pin when intentionally advancing join")
 PY
   fi
