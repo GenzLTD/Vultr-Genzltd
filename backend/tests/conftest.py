@@ -49,6 +49,12 @@ def app():
     ):
         os.environ.pop(_k, None)
     application = create_app("testing")
+    # create_app(env) currently ignores env; dryrun may copy root .env.example
+    # (FLASK_ENV=production) into backend/.env before CI pytest. Mark testing
+    # so seed-demo / similar non-prod gates match looma conftest expectations.
+    application.config["TESTING"] = True
+    if (application.config.get("FLASK_ENV") or "").lower() == "production":
+        application.config["FLASK_ENV"] = "testing"
     yield application
     os.unlink(path)
 
