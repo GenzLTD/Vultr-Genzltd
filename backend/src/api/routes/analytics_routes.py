@@ -4,7 +4,7 @@ Ownership: Jason (内测闭环埋点)
 
 Endpoints:
   POST /v1/analytics/events   - Batch log product events (optional_auth)
-  GET  /v1/analytics/funnel     - Funnel summary (require_auth)
+  GET  /v1/analytics/funnel     - Funnel summary (admin only)
   POST /v1/feedback/micro      - Contextual micro feedback (optional_auth)
 """
 from __future__ import annotations
@@ -86,7 +86,14 @@ def log_events():
 @analytics_bp.route("/analytics/funnel", methods=["GET"])
 @require_auth
 def funnel_stats():
-    """Closed-loop funnel aggregates for internal beta review."""
+    """Closed-loop funnel aggregates for internal beta review.
+
+    Admin-only (same gate as ``GET /v1/narrative/stats``). Free / non-admin
+    JWTs must not read global funnel aggregates.
+    """
+    if g.get("user_role") != "admin":
+        return jsonify(error="forbidden", message="admin only"), 403
+
     days = int(request.args.get("days", 30))
     days = max(1, min(days, 90))
     stats = _db().get_funnel_stats(days=days)
