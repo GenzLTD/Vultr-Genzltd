@@ -319,6 +319,12 @@ if "location /circle/" not in snip:
     rc = 1
 else:
     print("  \033[32m✓\033[0m circle 路径 /circle/")
+# H3：根路径跳转必须绝对 https Location，禁止相对 302（CF Flexible 会降成 http）
+if "https://$host/circle/" not in snip:
+    print("  \033[31m✗\033[0m circle 根跳转缺少绝对 https://$host/circle/ Location")
+    rc = 1
+else:
+    print("  \033[32m✓\033[0m circle 根跳转使用绝对 https Location")
 # include 已解开（circle 生产化窗口）：
 if re.search(r"(?m)^\s*include\s+/opt/vultr-genzltd-stack/current/nginx/sites/circle\.genz\.ltd\.conf\s*;", main_text):
     print("  \033[32m✓\033[0m nginx.conf include 已解开（本窗口期望态）")
