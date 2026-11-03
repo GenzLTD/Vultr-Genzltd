@@ -83,6 +83,12 @@ if [ -z "${GFCC_KERNEL_IMAGE:-}" ]; then
   exit 1
 fi
 set_kv GFCC_KERNEL_IMAGE "$GFCC_KERNEL_IMAGE"
+
+# Lock 4 — /health 双轨可观测（缺省跳过；deploy 注入）
+set_kv LOOMA_SHA "${LOOMA_SHA:-}"
+set_kv VULTR_TAG "${VULTR_TAG:-}"
+set_kv STACK_TAG "${STACK_TAG:-}"
+set_kv STACK_SHA "${STACK_SHA:-}"
 # ETHOS_AUTH_SECRET = circle 会场鉴权密钥；空 = stub（假 JWT 可建圈）。
 # 密钥语义走 seed_kv：仅缺失时写，机器是权威；公网开窗前由 deploy.yml
 # 的 nginx 门禁断言非空。

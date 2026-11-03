@@ -1,5 +1,5 @@
 # =============================================================
-# Vultr-Genzltd — 三门禁并行 → 单点扇入部署
+# Vultr-Genzltd — 四门禁并行 → 单点扇入部署
 #
 #   旧 overseas 管线的骨架是对的，本文件把它搬过来，并改掉第 3 步的源：
 #     compose / nginx / 契约 只从本仓取期望态，不再 rsync looma-zervi
@@ -7,15 +7,18 @@
 #
 #   git tag stack-vX.Y.Z（或 workflow_dispatch）
 #           │  concurrency: 门禁按 ref 隔离(stack-gates-<ref>) / 部署全局串行(deploy-stack)
-#           ├──────────────┬──────────────┬──────────────┐
-#           ▼              ▼              ▼
-#     backend-test     saas-build    contract-gate
-#     pytest+契约+干跑  pnpm tspace    前端 bundle ↔ 后端 url_map
-#           └──────┬───────┴──────────────┘
-#              needs: [backend-test, saas-build, contract-gate]
-#              if: 三项全绿 且 DEPLOY_ENABLED 且（tag 或 dispatch 非 dry_run）
+#           ├────────────────┬──────────────┬──────────────┬──────────────┐
+#           ▼                ▼              ▼              ▼
+#     dual-track-gates  backend-test   saas-build    contract-gate
+#     payment.v1+join   pytest+契约+干跑  pnpm tspace    前端 bundle ↔ 后端 url_map
+#           └──────┬─────────┴──────────────┴──────────────┘
+#              needs: [dual-track-gates, backend-test, saas-build, contract-gate]
+#              if: 四项全绿 且 DEPLOY_ENABLED 且（tag 或 dispatch 非 dry_run）
 #                  ▼
 #               deploy  9 步串行（含 kernel 构建、开窗双门禁）
+#
+#   双轨四锁：docs/dual-track-ledger-boundary.md（契约同源 / 两本物理库 /
+#   认人同源 / health 可观测）。本 workflow 不解除 stack-v* playbook 禁令。
 #
 #   部署门已开：vars.DEPLOY_ENABLED 已由 looma-zervi 海外部署 CI 有意置为 true，
 #   故 push tag stack-v* 即真实部署到 Vultr SG（见 vars.DEPLOY_HOST），且无审批拦截。
@@ -70,6 +73,38 @@ env:
   STACK_DIR: /opt/vultr-genzltd-stack
 
 jobs:
+  # ---------------------------------------------------------------
+  # 门禁 0：双轨四锁（契约同源 + 认人同源）— 与 A/B/C 并行
+  #   payment.v1 与 looma tip 同 blob；identity join 同 blob；
+  #   recompute_user_tier 标记在位。漂移则阻断 tag/deploy 扇入。
+  # ---------------------------------------------------------------
+  dual-track-gates:
+    name: dual-track-gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout looma tip（只读，比 blob）
+        uses: actions/checkout@v4
+        with:
+          repository: GenzLTD/looma-zervi
+          ref: main
+          path: .looma-tip
+          persist-credentials: false
+
+      - name: Lock1 payment.v1 same-blob
+        env:
+          LOOMA_CHECKOUT: ${{ github.workspace }}/.looma-tip
+          LOOMA_REF: main
+          STRICT_GFCC_SOURCE: "0"
+        run: bash scripts/assert-payment-v1-same-blob.sh
+
+      - name: Lock3 join semantics same-source
+        env:
+          LOOMA_CHECKOUT: ${{ github.workspace }}/.looma-tip
+          LOOMA_REF: main
+        run: bash scripts/assert-looma-join-semantics.sh
+
   # ---------------------------------------------------------------
   # 门禁 A：后端（与 saas-build 并行，互不依赖）
   # ---------------------------------------------------------------
@@ -232,10 +267,11 @@ jobs:
     concurrency:
       group: deploy-stack
       cancel-in-progress: false
-    needs: [backend-test, saas-build, contract-gate]
+    needs: [dual-track-gates, backend-test, saas-build, contract-gate]
     environment: production
     if: >-
       always()
+      && needs.dual-track-gates.result == 'success'
       && needs.backend-test.result == 'success'
       && needs.saas-build.result == 'success'
       && needs.contract-gate.result == 'success'
@@ -295,6 +331,9 @@ jobs:
           # 的 gfcc-kernel 用 ${GFCC_KERNEL_IMAGE:?} 插值，compose 对全部服务插值，
           # 缺了连 build backend 都会解析失败（预发 run 39081711926 同因）。
           GFCC_SHA="$(python3 -c "import json;print(json.load(open('contracts/gfcc/SOURCE.json'))['commit'])")"
+          LOOMA_SHA="$(python3 -c "import json;print(json.load(open('contracts/looma-join.PIN.json')).get('looma_sha',''))" 2>/dev/null || true)"
+          TAG="${GITHUB_REF_NAME}"
+          case "$TAG" in stack-v*) ;; *) TAG="sha-${GITHUB_SHA:0:12}" ;; esac
           echo "GFCC_SHA=$GFCC_SHA" >> "$GITHUB_ENV"
           $SSH_CMD "$DEPLOY_TARGET" "mkdir -p $STACK_DIR/scripts"
           scp -o BatchMode=yes scripts/env-kv.sh scripts/bootstrap-env.sh \
@@ -302,6 +341,7 @@ jobs:
           $SSH_CMD "$DEPLOY_TARGET" \
             "DEPLOY_PATH=$DEPLOY_PATH STACK_DIR=$STACK_DIR ENV_FILE=$DEPLOY_PATH/backend/.env \
              GFCC_KERNEL_IMAGE='gfcc-kernel:stage-$GFCC_SHA' \
+             LOOMA_SHA='$LOOMA_SHA' VULTR_TAG='$TAG' STACK_TAG='$TAG' STACK_SHA='$GITHUB_SHA' \
              JWT_SECRET='$JWT_SECRET' DEEPSEEK_API_KEY='$DEEPSEEK_API_KEY' \
              OPENAI_API_KEY='$OPENAI_API_KEY' QCC_AUTH_TOKEN='$QCC_AUTH_TOKEN' \
              GOOGLE_CLIENT_ID='$GOOGLE_CLIENT_ID' GOOGLE_CLIENT_SECRET='$GOOGLE_CLIENT_SECRET' \
