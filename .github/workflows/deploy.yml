@@ -402,13 +402,20 @@ jobs:
           $SSH_CMD "$DEPLOY_TARGET" "DEPLOY_PATH=$DEPLOY_PATH STACK_DIR=$STACK_DIR GFCC_SHA='$GFCC_SHA' bash -s" << KERNEL
           set -euo pipefail
           # 源码与预发同口径：public 仓直接拉 pinned SHA 到 /opt/src/gfcc。
-          if [ -d /opt/src/gfcc/.git ]; then
-            git -C /opt/src/gfcc fetch --depth=1 origin "\$GFCC_SHA" >/dev/null 2>&1
-          else
-            git clone --no-checkout https://github.com/GenzLTD/gfcc /opt/src/gfcc >/dev/null 2>&1
+          if [ ! -d /opt/src/gfcc/.git ]; then
+            git clone --no-checkout https://github.com/GenzLTD/gfcc /opt/src/gfcc >/dev/null 2>&1 \
+              || { echo "REFUSE: gfcc 仓库 clone 失败（网络抖动可重跑本部署）" >&2; exit 1; }
           fi
-          git -C /opt/src/gfcc fetch --depth=1 origin "\$GFCC_SHA" >/dev/null 2>&1 \
-            || { echo "REFUSE: gfcc 源码拉取失败（sha=\$GFCC_SHA）" >&2; exit 1; }
+          # fetch 加 3 次退避重试：瞬时网络抖动（stack-v0.1.11 曾 exit 128）不再直接进失败态（#46-③）
+          fetch_ok=0
+          for att in 1 2 3; do
+            if git -C /opt/src/gfcc fetch --depth=1 origin "\$GFCC_SHA" >/dev/null 2>&1; then
+              fetch_ok=1; break
+            fi
+            echo "gfcc fetch 第 \${att}/3 次失败，5 秒后重试…" >&2
+            sleep 5
+          done
+          [ "\$fetch_ok" = 1 ] || { echo "REFUSE: gfcc 源码拉取 3 次均失败（sha=\$GFCC_SHA，非瞬时抖动，人工介入）" >&2; exit 1; }
           git -C /opt/src/gfcc checkout --detach --force FETCH_HEAD >/dev/null 2>&1
           ksha="\$(git -C /opt/src/gfcc rev-parse HEAD)"
           [ "\$ksha" = "\$GFCC_SHA" ] || { echo "REFUSE: kernel 源码 HEAD=\$ksha 不是 \$GFCC_SHA" >&2; exit 1; }
