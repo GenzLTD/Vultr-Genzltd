@@ -130,6 +130,37 @@ else
 fi
 check "运行的 git_commit 与本次发布一致（代码确实生效）" 'running_commit_is_current'
 
+# Lock 4：SG 必须认 vultr 树。stack_sha（或回退 git_commit）应等于本次 marker；
+# looma_sha 若存在则是 join PIN，不得与 tip 强制相等。
+dual_track_ids_ok() {
+  local body tip tag stack kind track
+  body="$(curl -sf --max-time 10 http://127.0.0.1:5200/health 2>/dev/null)" || return 1
+  tip="$(printf '%s' "$body" | tr ',{' '\n' | grep '"git_commit"' | head -1 | sed 's/.*: *"//; s/".*//')"
+  tag="$(printf '%s' "$body" | tr ',{' '\n' | grep '"vultr_tag"' | head -1 | sed 's/.*: *"//; s/".*//')"
+  stack="$(printf '%s' "$body" | tr ',{' '\n' | grep '"stack_sha"' | head -1 | sed 's/.*: *"//; s/".*//')"
+  track="$(printf '%s' "$body" | tr ',{' '\n' | grep '"deploy_track"' | head -1 | sed 's/.*: *"//; s/".*//')"
+  kind="$(printf '%s' "$body" | tr ',{' '\n' | grep '"looma_sha_kind"' | head -1 | sed 's/.*: *"//; s/".*//')"
+  [ -n "$tip" ] || return 1
+  # 旧镜像可能尚无 deploy_track；有则必须 vultr
+  if [ -n "$track" ] && [ "$track" != "null" ] && [ "$track" != "vultr" ]; then
+    echo "REFUSE: deploy_track=$track (want vultr)" >&2
+    return 1
+  fi
+  if [ -n "$tag" ] && [ "$tag" != "null" ]; then
+    case "$tag" in stack-v*|sha-*) ;; *) echo "REFUSE: vultr_tag=$tag" >&2; return 1 ;; esac
+  fi
+  if [ -n "$stack" ] && [ "$stack" != "null" ] && [ "$stack" != "$tip" ]; then
+    echo "REFUSE: stack_sha=$stack != git_commit=$tip" >&2
+    return 1
+  fi
+  if [ -n "$kind" ] && [ "$kind" != "null" ] && [ "$kind" != "join_pin" ]; then
+    echo "REFUSE: looma_sha_kind=$kind (SG want join_pin)" >&2
+    return 1
+  fi
+  return 0
+}
+check "双轨 health：deploy_track=vultr / tip=stack（不拿 looma_sha 当 tip）" 'dual_track_ids_ok'
+
 if [ "$fail" -eq 0 ]; then
   printf '\033[32m=== 全部健康 ===\033[0m\n'
 else
