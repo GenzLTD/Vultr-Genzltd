@@ -1,0 +1,84 @@
+# =============================================================
+# Rotate ETHOS Secret — SG 一次性换钥（仅 workflow_dispatch）
+#
+# 为什么需要它：deploy.yml 的 bootstrap-env.sh 用 seed_kv，语义是
+#   「密钥仅当缺失时写，永不覆盖」，所以改 GH secret 不会改动机器上
+#   既有的 ETHOS_AUTH_SECRET。跨区统一密钥必须走这次显式覆盖。
+#
+# 安全约束：
+#   - 必须显式输入 ROTATE 才执行（防误触）
+#   - 密钥经 scp 传文件，不走命令行参数；立即 add-mask
+#   - 只打印长度 + sha256 前 16 位，从不打印明文
+#   - 远端写完后自校验哈希，不符则用备份回滚并退出 1
+#   - 只动 backend/.env 的 ETHOS 一行，不碰其它键
+#
+# 前置：先把 secrets.VULTR_ETHOS_AUTH_SECRET 改成新值，再跑本 workflow。
+# 后置：跑 ETHOS Parity Probe（diag-ethos-parity.yml）做全链路复验。
+# =============================================================
+name: Rotate ETHOS Secret
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: '输入 ROTATE 才会执行，其它值直接拒绝'
+        required: true
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sg-ethos-rotate
+  cancel-in-progress: false
+
+jobs:
+  rotate:
+    name: Rotate ETHOS_AUTH_SECRET on SG
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Guard + 准备密钥文件
+        env:
+          SEC: ${{ secrets.VULTR_ETHOS_AUTH_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.confirm }}" != "ROTATE" ]; then
+            echo "REFUSE: confirm 输入不是 ROTATE，拒绝执行"; exit 1
+          fi
+          if [ -z "${SEC:-}" ]; then
+            echo "REFUSE: secrets.VULTR_ETHOS_AUTH_SECRET 为空"; exit 1
+          fi
+          echo "::add-mask::$SEC"
+          umask 077
+          printf '%s' "$SEC" > /tmp/ethos_new.key
+          H=$(sha256sum /tmp/ethos_new.key | cut -c1-16)
+          echo "new_key_len=${#SEC} new_key_hash=$H"
+          echo "EXPECT=$H" >> "$GITHUB_ENV"
+
+      - name: Setup SSH
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_probe
+          chmod 600 ~/.ssh/id_probe
+          ssh-keyscan -H 139.180.184.25 >> ~/.ssh/known_hosts 2>/dev/null
+          echo "SSH_CMD=ssh -i ~/.ssh/id_probe -o BatchMode=yes -o ServerAliveInterval=30" >> "$GITHUB_ENV"
+          echo "DEPLOY_TARGET=root@139.180.184.25" >> "$GITHUB_ENV"
+
+      - name: 上传密钥与远端脚本
+        run: |
+          set -euo pipefail
+          scp -i ~/.ssh/id_probe -o BatchMode=yes /tmp/ethos_new.key "$DEPLOY_TARGET:/tmp/ethos_new.key"
+          scp -i ~/.ssh/id_probe -o BatchMode=yes scripts/rotate-ethos-remote.sh "$DEPLOY_TARGET:/tmp/rotate-ethos-remote.sh"
+
+      - name: 执行换钥
+        run: |
+          set -euo pipefail
+          $SSH_CMD "$DEPLOY_TARGET" "bash /tmp/rotate-ethos-remote.sh '$EXPECT' /tmp/ethos_new.key; rc=\$?; rm -f /tmp/rotate-ethos-remote.sh /tmp/ethos_new.key; exit \$rc"
+
+      - name: 清理本地密钥
+        if: always()
+        run: rm -f /tmp/ethos_new.key
