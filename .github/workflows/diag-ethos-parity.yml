@@ -130,6 +130,80 @@ jobs:
             http://127.0.0.1:5200/v1/auth/bridge 2>&1
           head -c 200 /tmp/br.json 2>/dev/null; echo
 
-          echo "===== 6. 结论行 ====="
-          echo "SUMMARY hash_equal=$( [ -n "$BE_SEC" ] && [ "$H1" = "$H2" ] && echo YES || echo NO ) kernel_len=${#K_SEC} looma_len=${#BE_SEC}"
+          echo "===== 6. 全链路：自铸 looma JWT → bridge → kernel /me（比 sub）====="
+          # 免口令：直接拿后端 JWT_SECRET 铸一枚 looma JWT（claims 与 sign_token 一致：
+          # sub/iat/exp/iss=looma），只对大写只读 SELECT 一个既有 user id，不写任何数据。
+          JWT_SECRET=$(grep -E '^JWT_SECRET=' /opt/looma-zervi/backend/.env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d ' ')
+          DBF=$(ls -1 /opt/looma-zervi/backend/data/*.db 2>/dev/null | head -1)
+          [ -z "$DBF" ] && DBF=$(find /opt/looma-zervi -maxdepth 4 -name '*.db' 2>/dev/null | head -1)
+          echo "jwt_secret_len=${#JWT_SECRET}"
+          echo "db_file=${DBF:-<none>}"
+          if [ -n "$JWT_SECRET" ] && [ -n "$DBF" ]; then
+            UID_=$(DBF="$DBF" python3 - << 'PY'
+          import os, sqlite3
+          try:
+              c = sqlite3.connect(os.environ["DBF"])
+              r = c.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()
+              print(r[0] if r else "")
+          except Exception as e:
+              print("")
+          PY
+            )
+            echo "probe_user_id=${UID_}"
+
+            LT=$(JS="$JWT_SECRET" UID="$UID_" python3 - << 'PY'
+          import base64, hashlib, hmac, json, os, time
+          s = os.environ["JS"].encode()
+          b = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+          now = int(time.time())
+          h = b(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
+          p = b(json.dumps({"sub": str(os.environ["UID"]), "iat": now, "exp": now + 600,
+                            "iss": "looma"}, separators=(",", ":")).encode())
+          sig = hmac.new(s, f"{h}.{p}".encode(), hashlib.sha256).digest()
+          print(f"{h}.{p}.{b(sig)}")
+          PY
+            )
+
+            echo "--- bridge（带 looma JWT）---"
+            curl -sS -m 8 -o /tmp/br2.json -w "bridge_http=%{http_code}\n" -X POST \
+              -H "Authorization: Bearer $LT" -H 'Content-Type: application/json' \
+              -d '{"target":"circle"}' http://127.0.0.1:5200/v1/auth/bridge 2>&1
+            python3 - << 'PY'
+          import json
+          try:
+              d = json.load(open("/tmp/br2.json"))
+          except Exception:
+              print("bridge_body=<unparsable>"); raise SystemExit
+          tok = d.get("circle_token") or ""
+          open("/tmp/ct.txt", "w").write(tok)
+          print(f"bridge_sub={d.get('sub')}")
+          print(f"bridge_user_id={d.get('user_id')}")
+          print(f"circle_token_len={len(tok)}")
+          if not tok:
+              print("bridge_body=" + json.dumps(d)[:200])
+          PY
+
+            CT=$(cat /tmp/ct.txt 2>/dev/null)
+            if [ -n "$CT" ]; then
+              echo "--- kernel /circle/api/me（带 bridge 铸的 token）---"
+              curl -sS -m 8 -o /tmp/me2.json -w "me_http=%{http_code}\n" \
+                -H "Authorization: Bearer $CT" http://127.0.0.1:$KP/circle/api/me 2>&1
+              python3 - << 'PY'
+          import json
+          try:
+              d = json.load(open("/tmp/me2.json"))
+          except Exception:
+              print("me_body=<unparsable>"); raise SystemExit
+          print(f"me_sub={d.get('sub')}")
+          print("me_body=" + json.dumps(d)[:240])
+          PY
+            else
+              echo "skip: no circle_token"
+            fi
+          else
+            echo "skip: jwt_secret/db unavailable"
+          fi
+
+          echo "===== 7. 结论行 ====="
+          echo "SUMMARY hash_equal=$( [ -n "$BE_SEC" ] && [ "$H1" = "$H2" ] && echo YES || echo NO ) kernel_len=${#K_SEC} looma_len=${#BE_SEC} kernel_hash=${H2}"
           REMOTE
