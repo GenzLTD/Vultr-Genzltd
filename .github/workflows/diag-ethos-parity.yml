@@ -156,22 +156,24 @@ jobs:
           echo "probe_user_id=${UID_}"
           if [ -n "$JWT_SECRET" ] && [ -n "$UID_" ]; then
 
-            LT=$(JS="$JWT_SECRET" UID="$UID_" python3 - << 'PY'
+            LT=$(JS="$JWT_SECRET" PROBE_UID="$UID_" python3 - << 'PY'
           import base64, hashlib, hmac, json, os, time
           s = os.environ["JS"].encode()
           b = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
           now = int(time.time())
           h = b(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
-          p = b(json.dumps({"sub": str(os.environ["UID"]), "iat": now, "exp": now + 600,
+          p = b(json.dumps({"sub": str(os.environ["PROBE_UID"]), "iat": now, "exp": now + 600,
                             "iss": "looma"}, separators=(",", ":")).encode())
           sig = hmac.new(s, f"{h}.{p}".encode(), hashlib.sha256).digest()
           print(f"{h}.{p}.{b(sig)}")
           PY
             )
 
+            echo "lt_len=${#LT}"
+            printf '%s' "$LT" > /tmp/lt.txt
             echo "--- bridge（带 looma JWT）---"
             curl -sS -m 8 -o /tmp/br2.json -w "bridge_http=%{http_code}\n" -X POST \
-              -H "Authorization: Bearer $LT" -H 'Content-Type: application/json' \
+              -H "Authorization: Bearer $(cat /tmp/lt.txt)" -H 'Content-Type: application/json' \
               -d '{"target":"circle"}' http://127.0.0.1:5200/v1/auth/bridge 2>&1
             python3 - << 'PY'
           import json
