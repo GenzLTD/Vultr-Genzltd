@@ -11,6 +11,7 @@
 #   - 只打印长度 + sha256 前 16 位，从不打印明文
 #   - 远端写完后自校验哈希，不符则用备份回滚并退出 1
 #   - 只动 backend/.env 的 ETHOS 一行，不碰其它键
+#   - 机上若有 /data/gfcc，同步覆盖其 .env 并 recreate am-gateway（#73）
 #
 # 前置：先把 secrets.VULTR_ETHOS_AUTH_SECRET 改成新值，再跑本 workflow。
 # 后置：跑 ETHOS Parity Probe（diag-ethos-parity.yml）做全链路复验。
