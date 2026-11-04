@@ -134,22 +134,27 @@ jobs:
           # 免口令：直接拿后端 JWT_SECRET 铸一枚 looma JWT（claims 与 sign_token 一致：
           # sub/iat/exp/iss=looma），只对大写只读 SELECT 一个既有 user id，不写任何数据。
           JWT_SECRET=$(grep -E '^JWT_SECRET=' /opt/looma-zervi/backend/.env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d ' ')
-          DBF=$(ls -1 /opt/looma-zervi/backend/data/*.db 2>/dev/null | head -1)
-          [ -z "$DBF" ] && DBF=$(find /opt/looma-zervi -maxdepth 4 -name '*.db' 2>/dev/null | head -1)
+          BE_CT=$(docker ps --format '{{.Names}}' | grep -iE 'looma[_-]backend' | head -1)
           echo "jwt_secret_len=${#JWT_SECRET}"
-          echo "db_file=${DBF:-<none>}"
-          if [ -n "$JWT_SECRET" ] && [ -n "$DBF" ]; then
-            UID_=$(DBF="$DBF" python3 - << 'PY'
+          echo "backend_container=${BE_CT:-<none>}"
+          echo "--- 后端容器内取一个既有 user id（只读 SELECT）---"
+          UID_=""
+          if [ -n "$BE_CT" ]; then
+            UID_=$(docker exec -i "$BE_CT" python - 2>/dev/null << 'PY' | tr -d '\r'
           import os, sqlite3
+          p = os.getenv("DATABASE_PATH", "data/looma.db")
           try:
-              c = sqlite3.connect(os.environ["DBF"])
+              c = sqlite3.connect(p)
               r = c.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()
               print(r[0] if r else "")
-          except Exception as e:
+          except Exception:
               print("")
           PY
             )
-            echo "probe_user_id=${UID_}"
+          fi
+          [ -z "$UID_" ] && echo "warn: container SELECT returned empty (bridge will 401 user-not-found)"
+          echo "probe_user_id=${UID_}"
+          if [ -n "$JWT_SECRET" ] && [ -n "$UID_" ]; then
 
             LT=$(JS="$JWT_SECRET" UID="$UID_" python3 - << 'PY'
           import base64, hashlib, hmac, json, os, time
