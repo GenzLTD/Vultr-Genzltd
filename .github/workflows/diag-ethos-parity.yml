@@ -1,0 +1,135 @@
+# =============================================================
+# ETHOS Parity Probe — SG 只读取证（仅 workflow_dispatch）
+#
+# 目的：证明 looma(backend/.env) 与 gfcc_kernel 用的是**同一把**
+#       ETHOS_AUTH_SECRET，且该钥能铸出 kernel 认的 HS256 token。
+#
+# 安全约束：
+#   - 绝不打印密钥明文，只打印长度 + sha256 前 16 位
+#   - 不做任何写入/重启/部署动作；纯 curl + grep + docker exec 读
+#   - token 由本机 python3 现铸，sub=parity-probe，1 小时过期
+#
+# 判读口径：
+#   hash_equal=YES  → 同钥
+#   kernel /circle/api/me 以 parity-probe token 返回：
+#     200 / 403 → 签名被接受（403 只是 scope 不足，不否定同钥）
+#     401       → 签名被拒 ⇒ 密钥不一致（或 claims 口径不符）
+#   匿名 /circle/api/me 401 → kernel 处于 strict 模式（非 stub 放行）
+# =============================================================
+name: ETHOS Parity Probe
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sg-ethos-parity
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Read-only ETHOS parity probe (SG)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_probe
+          chmod 600 ~/.ssh/id_probe
+          ssh-keyscan -H 139.180.184.25 >> ~/.ssh/known_hosts 2>/dev/null
+          echo "SSH_CMD=ssh -i ~/.ssh/id_probe -o BatchMode=yes -o ServerAliveInterval=30" >> "$GITHUB_ENV"
+          echo "DEPLOY_TARGET=root@139.180.184.25" >> "$GITHUB_ENV"
+
+      - name: Probe (read-only)
+        run: |
+          set -euo pipefail
+          $SSH_CMD "$DEPLOY_TARGET" 'bash -s' << 'REMOTE'
+          set -u
+          echo "===== 0. 环境 ====="
+          hostname; date -u +%FT%TZ
+          echo "--- 当前 stack 标识 ---"
+          grep -E '^(VULTR_TAG|STACK_TAG|STACK_SHA|GFCC_KERNEL_IMAGE)=' /opt/looma-zervi/backend/.env 2>/dev/null || echo "(无 stack 标识行)"
+
+          echo "===== 1. kernel 容器定位 ====="
+          K=$(docker ps --format '{{.Names}} {{.Image}}' | grep -iE 'gfcc[_-]kernel' | awk '{print $1}' | head -1)
+          [ -z "$K" ] && K=$(docker ps --format '{{.Names}}' | grep -i kernel | head -1)
+          echo "kernel_container=${K:-<none>}"
+          if [ -n "$K" ]; then
+            docker ps --filter "name=$K" --format '  image={{.Image}} status={{.Status}} ports={{.Ports}}'
+          fi
+
+          echo "===== 2. 两侧 ETHOS 指纹（只出哈希，不出明文）====="
+          BE_SEC=$(grep -E '^ETHOS_AUTH_SECRET=' /opt/looma-zervi/backend/.env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d ' ')
+          if [ -n "$K" ]; then
+            K_SEC=$(docker exec "$K" printenv ETHOS_AUTH_SECRET 2>/dev/null | tr -d '\r')
+          else
+            K_SEC=""
+          fi
+          echo "looma_len=${#BE_SEC}"
+          echo "kernel_len=${#K_SEC}"
+          H1=$(printf %s "$BE_SEC" | sha256sum | cut -c1-16)
+          H2=$(printf %s "$K_SEC" | sha256sum | cut -c1-16)
+          echo "looma_hash=${H1:-<empty>}"
+          echo "kernel_hash=${H2:-<empty>}"
+          if [ -n "$BE_SEC" ] && [ "$H1" = "$H2" ]; then echo "hash_equal=YES"; else echo "hash_equal=NO"; fi
+
+          echo "===== 3. kernel 鉴权形态（匿名）====="
+          KP=$(docker port "$K" 5211/tcp 2>/dev/null | head -1 | sed 's/.*://')
+          [ -z "$KP" ] && KP=5211
+          echo "kernel_local_port=$KP"
+          echo "--- 匿名 /circle/api/me ---"
+          curl -sS -m 6 -o /tmp/anon.json -w "http=%{http_code}\n" "http://127.0.0.1:$KP/circle/api/me" 2>&1
+          head -c 160 /tmp/anon.json 2>/dev/null; echo
+
+          echo "===== 4. 用 kernel 密钥现铸 token → 打 kernel ====="
+          if [ -n "$K_SEC" ]; then
+            TOK=$(KP="$K_SEC" python3 - << 'PY'
+          import base64, hashlib, hmac, json, os, time
+          s = os.environ["KP"].encode()
+          b = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+          now = int(time.time())
+          h = b(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
+          p = b(json.dumps({"sub": "parity-probe", "tier": "free", "iat": now,
+                            "exp": now + 3600, "iss": "looma-bridge"},
+                           separators=(",", ":")).encode())
+          sig = hmac.new(s, f"{h}.{p}".encode(), hashlib.sha256).digest()
+          print(f"{h}.{p}.{b(sig)}")
+          PY
+            )
+            echo "token_len=${#TOK}"
+            echo "--- 带 token /circle/api/me ---"
+            curl -sS -m 6 -o /tmp/auth.json -w "http=%{http_code}\n" \
+              -H "Authorization: Bearer $TOK" "http://127.0.0.1:$KP/circle/api/me" 2>&1
+            head -c 240 /tmp/auth.json 2>/dev/null; echo
+            echo "--- 同 token 打错误密钥对照（期望 401）---"
+            BAD=$(KP="wrong-secret-probe" python3 - << 'PY'
+          import base64, hashlib, hmac, json, os, time
+          s = os.environ["KP"].encode()
+          b = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+          now = int(time.time())
+          h = b(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
+          p = b(json.dumps({"sub": "parity-probe", "tier": "free", "iat": now,
+                            "exp": now + 3600, "iss": "looma-bridge"},
+                           separators=(",", ":")).encode())
+          sig = hmac.new(s, f"{h}.{p}".encode(), hashlib.sha256).digest()
+          print(f"{h}.{p}.{b(sig)}")
+          PY
+            )
+            curl -sS -m 6 -o /dev/null -w "bad_key_http=%{http_code}\n" \
+              -H "Authorization: Bearer $BAD" "http://127.0.0.1:$KP/circle/api/me" 2>&1
+          else
+            echo "skip: kernel secret empty"
+          fi
+
+          echo "===== 5. looma bridge 端点形态（回环 :5200）====="
+          echo "--- 匿名（新版 401 / 旧版 501）---"
+          curl -sS -m 6 -o /tmp/br.json -w "http=%{http_code}\n" -X POST \
+            -H 'Content-Type: application/json' -d '{"target":"circle"}' \
+            http://127.0.0.1:5200/v1/auth/bridge 2>&1
+          head -c 200 /tmp/br.json 2>/dev/null; echo
+
+          echo "===== 6. 结论行 ====="
+          echo "SUMMARY hash_equal=$( [ -n "$BE_SEC" ] && [ "$H1" = "$H2" ] && echo YES || echo NO ) kernel_len=${#K_SEC} looma_len=${#BE_SEC}"
+          REMOTE
