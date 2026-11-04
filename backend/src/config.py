@@ -29,6 +29,10 @@ class Config:
     JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "24"))
     JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
+    # Ethos / circle bridge — must equal gfcc_kernel's ETHOS_AUTH_SECRET.
+    # Empty = /v1/auth/bridge?target=circle returns honest 501 (no fake 200).
+    ETHOS_AUTH_SECRET = os.getenv("ETHOS_AUTH_SECRET", "").strip()
+
     # Supabase — THOMAS 生态统一认证 (RFC docs/rfc/supabase-unified-auth-v1.md)
     SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
     SUPABASE_PUBLISHABLE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
@@ -192,6 +196,9 @@ class Config:
     # Chain B fan-out — PlanetX → gfcc_kernel /v1/signal-ingest. Empty = skip.
     GFCC_SIGNAL_INGEST_URL = os.getenv("GFCC_SIGNAL_INGEST_URL", "")
     SIGNAL_INGEST_SECRET = os.getenv("SIGNAL_INGEST_SECRET", "")
+    # Circle identity bridge — same HS256 secret as gfcc_kernel ETHOS_AUTH_SECRET.
+    # Empty -> POST /v1/auth/bridge?target=circle stays 501 (no fake mint).
+    ETHOS_AUTH_SECRET = os.getenv("ETHOS_AUTH_SECRET", "").strip()
 
     @property
     def is_production(self):
@@ -338,6 +345,7 @@ def _refresh_config():
     Config.DEMOPPI_SIGNAL_INGEST_URL = os.getenv("DEMOPPI_SIGNAL_INGEST_URL", "")
     Config.GFCC_SIGNAL_INGEST_URL = os.getenv("GFCC_SIGNAL_INGEST_URL", "")
     Config.SIGNAL_INGEST_SECRET = os.getenv("SIGNAL_INGEST_SECRET", "")
+    Config.ETHOS_AUTH_SECRET = os.getenv("ETHOS_AUTH_SECRET", "").strip()
 
 
 # ── 数据出境守卫（合规）────────────────────────────────────────────────────
