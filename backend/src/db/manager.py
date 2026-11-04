@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash   TEXT,                      -- bcrypt hash (nullable for miniprogram-only)
     wechat_openid   TEXT UNIQUE,               -- WeChat miniprogram login
     supabase_uid    TEXT UNIQUE,               -- Supabase Auth user UUID (THOMAS 统一身份, RFC supabase-unified-auth-v1)
+    principal_sub   TEXT UNIQUE,               -- GFCC principal.sub（认钱认人）；缺省 bootstrap=id，见 identity/ledger_subject.py
     name            TEXT DEFAULT '',
     tier            TEXT DEFAULT 'free',       -- free | supporter | pro
     role            TEXT DEFAULT 'user',       -- user | enterprise | admin | driver
@@ -1325,6 +1326,33 @@ class DatabaseManager:
                     "Migration UNIQUE INDEX idx_users_supabase_uid failed: %s", e
                 )
 
+            # Migration: principal_sub — GFCC principal.sub ↔ users.id（认钱认人）
+            #   identity/ledger_subject.ensure_principal_sub 会读该列并在缺失时写回；
+            #   旧库必须先 ALTER 加列，否则 /v1/auth/bridge 会 500（AttributeError）。
+            try:
+                conn.execute("ALTER TABLE users ADD COLUMN principal_sub TEXT")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e):
+                    logger.warning(
+                        "Migration ALTER TABLE users ADD COLUMN principal_sub failed: %s", e
+                    )
+            try:
+                conn.execute(
+                    "UPDATE users SET principal_sub = id "
+                    "WHERE principal_sub IS NULL OR trim(principal_sub) = ''"
+                )
+            except sqlite3.OperationalError as e:
+                logger.warning("Migration backfill principal_sub failed: %s", e)
+            try:
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_principal_sub "
+                    "ON users(principal_sub)"
+                )
+            except sqlite3.OperationalError as e:
+                logger.warning(
+                    "Migration UNIQUE INDEX idx_users_principal_sub failed: %s", e
+                )
+
             # ============================================================
             # Migration: 驾驶员 / 多租户（清单 §1.1 ~ §1.5）
             #   结构部分（加列 + 索引 + 触发器）必须幂等；
@@ -1574,6 +1602,22 @@ END;
     def get_user_by_id(self, user_id: str):
         with self.get_conn() as conn:
             row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+    def set_principal_sub(self, user_id: str, principal_sub: str):
+        """Persist GFCC principal.sub (or bootstrap equivalent) for a user."""
+        with self.get_conn() as conn:
+            conn.execute(
+                "UPDATE users SET principal_sub = ?, updated_at = datetime('now') WHERE id = ?",
+                (principal_sub, user_id),
+            )
+
+    def get_user_by_principal_sub(self, principal_sub: str):
+        """Resolve a looma user by GFCC principal.sub."""
+        with self.get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM users WHERE principal_sub = ?", (principal_sub,)
+            ).fetchone()
         return dict(row) if row else None
 
     def get_user_by_supabase_uid(self, supabase_uid: str):
