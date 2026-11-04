@@ -232,30 +232,46 @@ def _git_commit() -> str:
 
 
 def _dual_track_health_ids() -> dict:
-    """Lock 4 observability: looma_sha + vultr_tag/stack_sha (env-driven, additive).
+    """Lock 4: dual-track health — probe the correct tree.
 
-    Missing env → null/unknown; never fail /health. Deploy injects these when ready.
+    Probe rules (no cross-track impersonation):
+    - looma / Tianyi tip → `looma_sha` (== `git_commit`); `stack_sha`/`vultr_tag` null
+    - vultr / SG tip → `stack_sha` + `vultr_tag`; `looma_sha` is join PIN only
+    - Never compare CN.looma_sha to SG.looma_sha for 'who's behind'
     """
     commit = _git_commit()
-    looma_sha = (
+    region = (os.getenv("DEPLOY_REGION") or "").strip().upper()
+    env_looma = (
         os.getenv("LOOMA_SHA", "").strip()
         or os.getenv("LOOMA_JOIN_SHA", "").strip()
-        or None
     )
     vultr_tag = (
         os.getenv("VULTR_TAG", "").strip()
         or os.getenv("STACK_TAG", "").strip()
         or None
     )
-    stack_sha = (
-        os.getenv("STACK_SHA", "").strip()
-        or os.getenv("GIT_COMMIT", "").strip()
-        or commit
-    )
+    env_stack = os.getenv("STACK_SHA", "").strip() or None
+    # Track from DEPLOY_REGION / VULTR_TAG only — stray STACK_SHA on CN must not flip.
+    is_vultr = region in ("SG", "US", "FRA") or bool(vultr_tag)
+
+    if is_vultr:
+        looma_sha = env_looma or None
+        stack_sha = env_stack or (commit if commit != "unknown" else None)
+        return {
+            "deploy_track": "vultr",
+            "looma_sha": looma_sha,
+            "looma_sha_kind": "join_pin" if looma_sha else None,
+            "vultr_tag": vultr_tag,
+            "stack_sha": stack_sha,
+        }
+
+    tip = env_looma or (commit if commit != "unknown" else None)
     return {
-        "looma_sha": looma_sha,
-        "vultr_tag": vultr_tag,
-        "stack_sha": stack_sha if stack_sha and stack_sha != "unknown" else commit,
+        "deploy_track": "looma",
+        "looma_sha": tip,
+        "looma_sha_kind": "deploy_tip" if tip else None,
+        "vultr_tag": None,
+        "stack_sha": None,
     }
 
 
@@ -378,7 +394,9 @@ def create_app(env="development"):
             service="looma-backend",
             version="v1",
             git_commit=_git_commit(),
+            deploy_track=track_ids["deploy_track"],
             looma_sha=track_ids["looma_sha"],
+            looma_sha_kind=track_ids["looma_sha_kind"],
             vultr_tag=track_ids["vultr_tag"],
             stack_sha=track_ids["stack_sha"],
             llm_provider=primary_llm,

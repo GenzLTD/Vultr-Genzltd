@@ -45,14 +45,21 @@ SG 发布树必须携带：
 
 ### `/health` 字段（可加、不破旧客户端）
 
-| 字段 | 含义 | 来源 |
-| --- | --- | --- |
-| `git_commit` | 既有 | 部署 commit |
-| `looma_sha` | 认人/契约对齐参考 | env `LOOMA_SHA` 或 pin / 与 `git_commit` 同义别名（CN） |
-| `vultr_tag` | SG 栈 tag | env `VULTR_TAG` / `STACK_TAG` |
-| `stack_sha` | 本仓发布 SHA | env `STACK_SHA` 或 `git_commit` |
+| 字段 | 天翼 / looma | SG / vultr | 来源 |
+| --- | --- | --- | --- |
+| `deploy_track` | `"looma"` | `"vultr"` | `DEPLOY_REGION` / stack env 推断 |
+| `git_commit` | **looma tip** | **Vultr tip** | `GIT_COMMIT` → `git_commit.txt` → rev-parse |
+| `looma_sha` | **部署 tip**（=`git_commit`） | **join PIN only**（≠ tip） | CN：commit；SG：`LOOMA_SHA`←`looma-join.PIN.json` |
+| `looma_sha_kind` | `"deploy_tip"` | `"join_pin"` | 与上配套 |
+| `vultr_tag` | **null** | `stack-v*` | env `VULTR_TAG` / `STACK_TAG` |
+| `stack_sha` | **null** | 本仓发布 SHA | env `STACK_SHA`（缺则回退 `git_commit`） |
 
-生产改 health 若暂缓：以 CI 门禁 + 本清单验收；health 字段可先读 env，缺省为 `null`/`unknown`。
+**探活「认对树」（Issue #46 §2）：**
+1. 天翼版本 → 只认 `looma_sha` / `git_commit`；`stack_sha`/`vultr_tag` 必须为 null
+2. SG 版本 → 只认 `stack_sha` + `vultr_tag`；**禁止**用 SG.`looma_sha` 与天翼 tip 比先后（PIN 落后 ≠ 栈落后）
+3. deploy 写入：`echo "$GITHUB_SHA" > backend/git_commit.txt` 必须是**本仓** tip；FRA/SG 不得写入 looma SHA
+
+生产改 health 若暂缓：以 CI 门禁 + 本清单验收；缺 env 时 SG.`looma_sha` 可为 null，不失败 `/health`。
 
 ### 验收用例
 
