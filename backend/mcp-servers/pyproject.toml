@@ -1,4 +1,4 @@
-﻿# Looma MCP Servers (FastMCP 3.x Sidecar)
+# Looma MCP Servers (FastMCP 3.x Sidecar)
 # Python ≥ 3.10 required, install: pip install fastmcp
 [project]
 name = "looma-mcp-servers"
