@@ -1,5 +1,5 @@
 # Tatha - nine-lib + API (tighten as needed; security pins align with Dependabot Batch B)
-litellm>=1.0.0
+litellm>=1.84.0
 markitdown>=0.0.1
 llama-index>=0.10.0
 llama-index-core>=0.10.0
