@@ -7,7 +7,7 @@ name = "tatha"
 version = "0.1.0"
 description = "Tatha 主仓能力层：简历解析、匹配、诗人/诗词 RAG，基于九库统一模型与文档链路"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     # 1. LiteLLM - 统一多平台模型调用
     "litellm>=1.0.0",
