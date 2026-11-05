@@ -1,12 +1,12 @@
-# Looma MCP Servers (FastMCP 3.x Sidecar)
-# Python ≥ 3.10 required, install: pip install fastmcp
+# Looma MCP Servers (FastMCP via official mcp package)
+# Python >= 3.11 required (joserfc dual-resolve); install: pip install "mcp>=1.20,<2"
 [project]
 name = "looma-mcp-servers"
 version = "0.1.0"
 description = "FastMCP Sidecar: rag / match_jobs / parse_resume tools"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    "fastmcp>=2.0,<3.0",
+    "mcp>=1.20,<2",
     "requests>=2.31.0",
 ]
 

@@ -7,7 +7,7 @@ gunicorn>=21.2.0
 markitdown[pdf,docx]>=0.0.1
 
 # Auth
-PyJWT>=2.8.0
+PyJWT>=2.14.0
 bcrypt>=4.1.0
 google-auth>=2.28.0
 
@@ -16,13 +16,15 @@ stripe>=8.0.0
 
 # HTTP
 requests>=2.31.0
+# Batch A runtime pin (transitive of requests/httpx paths in some images)
+certifi>=2026.10.18
 
 # RAG
 onnxruntime>=1.17.0
 chromadb>=0.5.0
 
-# MCP Sidecar (FastMCP)
-fastmcp>=2.0
+# MCP Sidecar: official mcp package (mcp.server.fastmcp); not standalone fastmcp
+mcp>=1.20,<2
 
 # Utils
 python-dotenv>=1.0.0

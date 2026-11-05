@@ -1,4 +1,4 @@
-# Tatha - 九库 + API（版本可随需收紧）
+# Tatha - nine-lib + API (tighten as needed; security pins align with Dependabot Batch B)
 litellm>=1.0.0
 markitdown>=0.0.1
 llama-index>=0.10.0
@@ -16,5 +16,13 @@ pydantic-evals>=0.0.1
 fastapi>=0.100.0
 uvicorn[standard]>=0.20.0
 python-dotenv>=1.0.0
-# memory 端口（GFCC 契约 memory.v1）读 gfcc 库用：同步驱动即可，recall 是短查询
+# memory port (GFCC memory.v1): sync driver; recall is short query
 psycopg[binary]>=3.1
+
+# Batch B security pins (Dockerfile pip install -r; uv.lock not in image)
+anyio>=4.14.2
+nltk>=3.10.3
+pillow>=13.0.0
+sentence-transformers>=5.6.0,<6
+# pydantic-ai-slim pulls standalone fastmcp; floor at patched, stay on 3.x
+fastmcp>=3.2.0,<4

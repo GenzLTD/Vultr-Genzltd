@@ -54,3 +54,15 @@ jobs-apify = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+
+[tool.uv]
+# Dependabot Batch B floors: keep resolver off vulnerable transitives.
+# Mirrored in requirements.txt for Dockerfile pip install (uv.lock not in image).
+constraint-dependencies = [
+    "anyio>=4.14.2",
+    "nltk>=3.10.3",
+    "pillow>=13.0.0",
+    "sentence-transformers>=5.6.0,<6",
+    "fastmcp>=3.2.0,<4",
+]
