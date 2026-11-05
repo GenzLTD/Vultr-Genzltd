@@ -1,4 +1,4 @@
-# Looma MCP Servers (FastMCP 3.x Sidecar)
+﻿# Looma MCP Servers (FastMCP 3.x Sidecar)
 # Python ≥ 3.10 required, install: pip install fastmcp
 [project]
 name = "looma-mcp-servers"
@@ -8,11 +8,13 @@ requires-python = ">=3.10"
 dependencies = [
     "fastmcp>=2.0,<3.0",
     "requests>=2.31.0",
-    "chromadb>=0.5.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.4.0"]
+# Optional: only needed if running local Chroma client in-process.
+# Production uses compose service `chromadb/chroma` (looma-chromadb); do not stop that container for this change.
+chromadb = ["chromadb>=0.5.0"]
 
 [tool.setuptools]
 py-modules = []
